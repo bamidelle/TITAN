@@ -2,9 +2,13 @@ import streamlit as st
 import random
 from datetime import datetime, timedelta, date
 import pandas as pd
-import matplotlib.pyplot as plt
+import joblib
 from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean
 from sqlalchemy.orm import declarative_base, sessionmaker, scoped_session
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.pipeline import Pipeline
+from sklearn.linear_model import LinearRegression
 
 # ---------------- DATABASE SETUP ----------------
 DB_PATH = "titan_restoration.db"
@@ -51,261 +55,232 @@ class User(Base):
 
 Base.metadata.create_all(engine)
 
-# ---------------- UI GLOBAL STYLE ----------------
+# ---------------- INTERNAL ML TRAINING (no UI exposed) ----------------
+def internal_ml_autorun():
+    s = SessionLocal()
+    try:
+        df = pd.read_sql(Lead.__table__.select(), engine)
+        if df.empty:
+            return None, "No data for ML autorun"
+        num = ["cost_to_acquire","estimate_value","score","time_left"]
+        cat = ["source","owner","status"]
+        pre = ColumnTransformer([
+            ("num", StandardScaler(), num),
+            ("cat", OneHotEncoder(handle_unknown="ignore"), cat)
+        ])
+        pipe = Pipeline([("pre", pre),("lr", LinearRegression())])
+        X = df[num+cat]
+        y = df["estimate_value"]
+        model = pipe.fit(X,y)
+        joblib.dump(model, "internal_lead_model.joblib")
+        return model, "ML internal autorun success"
+    except Exception as e:
+        return None, str(e)
+    finally:
+        s.close()
+
+internal_ml_autorun()
+
+# ---------------- UI STYLE ----------------
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Comfortaa:wght@300;400;700&display=swap');
-* { font-family: 'Comfortaa'; }
-body, .main { background: white; }
-.sidebar-button { background:black; color:white; padding:10px; border-radius:6px; display:block; margin-bottom:6px; font-size:14px; font-weight:bold; }
-.metric-card { background:black; padding:18px; border-radius:12px; color:white; margin:8px; min-width:200px; }
-.metric-title { color:white; font-size:14px; font-weight:bold; margin-bottom:6px; }
-.progress-bar { width:100%; height:6px; border-radius:4px; animation: pulse 1.6s infinite alternate; }
-@keyframes pulse { from{opacity:0.3;} to{opacity:1;} }
-.lead-chip{ padding:5px 8px; font-size:12px; border-radius:6px; font-weight:bold; display:inline-block; }
-.priority-time{ color:#dc2626; font-size:15px; font-weight:bold; }
-.priority-money{ color:#22c55e; font-size:18px; font-weight:bold; }
-.alert-panel{ position:fixed; top:50px; right:70px; background:black; padding:12px 16px; border-radius:10px; width:340px; animation:slideDown 0.3s ease-in-out; }
-@keyframes slideDown{ from{opacity:0; transform:translateY(-8px);} to{opacity:1; transform:translateY(0);} }
-.close-btn{ float:right; cursor:pointer; font-size:18px; color:white; }
+* {font-family:'Comfortaa';}
+body, .main {background:white;}
+.sidebar-button{background:black;color:white;padding:11px;border-radius:6px;margin:6px 0;font-size:14px;display:block;text-align:center;font-weight:bold;cursor:pointer;}
+.metric-card{background:black;padding:18px;border-radius:12px;color:white;margin:8px;min-width:190px;}
+.metric-title{color:white;font-size:15px;font-weight:bold;margin-bottom:7px;}
+.metric-value{font-size:26px;font-weight:bold;}
+.progress-bar{height:6px;border-radius:4px;opacity:.8;animation: stretch 0.8s ease-out;}
+@keyframes stretch{from{width:10%;} to{width:var(--target);}}
+.priority-time{color:#dc2626;font-size:17px;font-weight:bold;}
+.priority-money{color:#22c55e;font-size:20px;font-weight:bold;}
+.alert-panel{position:fixed;top:10px;right:20px;background:black;padding:12px;border-radius:10px;color:white;width:300px;animation:slide 0.4s ease-out;}
+@keyframes slide{from{opacity:0;transform:translateY(-10px);} to{opacity:1;transform:translateY(0);}}
+.close-btn{float:right;cursor:pointer;font-size:20px;color:white;}
+.lead-chip{padding:5px 8px;font-size:12px;border-radius:6px;font-weight:bold;display:inline-block;margin-top:4px;}
 </style>
 """, unsafe_allow_html=True)
 
 # ---------------- LOGIN HANDLING ----------------
-def login_handler():
-    st.sidebar.markdown("### 🔐 Team Login")
-    user_input = st.sidebar.text_input("Username", key="login_user")
+if "user" not in st.session_state: 
+    st.session_state.user=None
+if not st.session_state.user:
+    u = st.sidebar.text_input("Username")
     if st.sidebar.button("Login"):
         s = SessionLocal()
         try:
-            u = s.query(User).filter(User.username == user_input).first()
-            if not u:
-                new_user = User(username=user_input, full_name=user_input, role="Viewer")
-                s.add(new_user)
+            user = s.query(User).filter(User.username==u).first()
+            if not user:
+                s.add(User(username=u,full_name=u,role="Admin"))
                 s.commit()
-            st.session_state.user = user_input
-            st.session_state.role = u.role if u else "Viewer"
-            st.session_state.page = "pipeline"
-            st.rerun()
-        except Exception:
+            st.session_state.user=u
+        except: 
             s.rollback()
-        finally:
-            s.close()
-
-if "user" not in st.session_state:
-    st.session_state.user = None
-    st.session_state.role = "Viewer"
-    login_handler()
-
-if not st.session_state.user:
-    st.warning("Login required — enter name on sidebar.")
+        finally: s.close()
+        st.rerun()
     st.stop()
 
-# Logout button
+# ---------------- SIDEBAR NAV ----------------
+def nav(btn,page):
+    if st.sidebar.button(btn,key=btn): 
+        st.session_state.page=page
+        st.rerun()
+
+st.sidebar.markdown("### 🧭 Navigation")
+nav("📌 Pipeline", "pipeline")
+nav("📊 Analytics", "analytics")
+nav("⚙ Settings", "settings")
+nav("👤 Profile", "profile")
 st.sidebar.button("🚪 Logout", on_click=lambda: st.session_state.clear())
 
-# ---------------- DATE SELECTION ----------------
-st.markdown("### 📅 Lead Data Timeline")
-start_date = st.date_input("Start Date", date.today())
-end_date = st.date_input("End Date", date.today())
-
-# ---------------- FAST DB READ (cached) ----------------
-@st.cache_data(ttl=45)
-def get_filtered_leads():
-    s = SessionLocal()
+# ---------------- HELPERS ----------------
+@st.cache_data(ttl=15)
+def load_leads():
+    s=SessionLocal()
     try:
-        return s.query(Lead).filter(
-            Lead.created_at >= datetime.combine(start_date, datetime.min.time()),
-            Lead.created_at <= datetime.combine(end_date, datetime.max.time())
-        ).all()
-    finally:
-        s.close()
+        return s.query(Lead).all()
+    finally: s.close()
 
 # ---------------- ALERT PANEL ----------------
-def alert_section():
-    leads = get_filtered_leads()
-    overdue = [l for l in leads if l.status == "OVERDUE"]
-    if overdue:
-        st.markdown(f"<div class='alert-panel' id='alert_panel'><span class='metric-title'>🚨 SLA ALERTS ({len(overdue)})</span><span class='close-btn' onclick=\"document.getElementById('alert_panel').style.display='none'\">✖</span></div>", unsafe_allow_html=True)
-        for l in overdue[:3]:
-            st.markdown(f"<div class='metric-card'><span class='priority-money'>${l.estimate_value:,.2f}</span><br><span class='priority-time'>{l.time_left} hrs left</span></div>", unsafe_allow_html=True)
+leads = load_leads()
+overdue = [l for l in leads if l.status=="OVERDUE"]
+if overdue:
+    st.markdown(f"<div class='alert-panel' id='alert'><b>🚨 SLA ALERT ({len(overdue)})</b><span class='close-btn' onclick=\"document.getElementById('alert').style.display='none'\">✖</span></div>",unsafe_allow_html=True)
+    for l in overdue[:2]:
+        st.markdown(f"<div>{l.name} → <span class='priority-time'>{l.time_left} hrs</span> | <span class='priority-money'>${l.estimate_value:,.2f}</span></div>",unsafe_allow_html=True)
 
 # ---------------- PIPELINE DASHBOARD ----------------
-def pipeline_section():
-    leads = get_filtered_leads()
+if st.session_state.get("page","pipeline")=="pipeline":
     st.markdown("## TOTAL LEAD PIPELINE KEY PERFORMANCE INDICATOR")
-    st.markdown("*Pipeline overview of SLA compliance, conversions, and job values.*", unsafe_allow_html=True)
+    st.markdown("*Overview of active leads, SLA compliance, inspections, conversions and job values.*",unsafe_allow_html=True)
 
-    active = sum(1 for l in leads if l.status not in ["OVERDUE"])
-    qualified = sum(1 for l in leads if l.status == "QUALIFIED")
-    inspected = sum(1 for l in leads if l.status == "INSPECTED")
-    est_sent = sum(1 for l in leads if l.status == "ESTIMATE_SENT")
-    won = sum(1 for l in leads if l.converted or l.status=="AWARDED")
-    pipeline_vals = sum((l.estimate_value or 0) for l in leads)
-    marketing_spend = sum((l.cost_to_acquire or 0) for l in leads)
-    sla_success = random.randint(76, 100)
-
-    kpis = [
-        ("ACTIVE LEADS", active),
-        ("SLA SUCCESS", f"{sla_success}%"),
-        ("QUALIFIED", qualified),
-        ("INSPECTIONS DONE", inspected),
-        ("ESTIMATES SENT", est_sent),
-        ("WON CONVERSIONS", won),
-        ("PIPELINE VALUES", f"${pipeline_vals:,.2f}")
+    stats = [
+        ("ACTIVE LEADS", sum(1 for l in leads if not l.converted)),
+        ("SLA SUCCESS", f"{random.randint(75,100)}%"),
+        ("QUALIFIED", sum(1 for l in leads if l.status=="QUALIFIED")),
+        ("CONVERTED", sum(1 for l in leads if l.converted)),
+        ("INSPECTION BOOKED", sum(1 for l in leads if l.inspection_date)),
+        ("ESTIMATE SENT", sum(1 for l in leads if l.status=="ESTIMATE_SENT")),
+        ("PIPELINE JOB VALUES", f"${sum(l.estimate_value or 0 for l in leads):,.2f}")
     ]
 
-    row1 = st.columns(4)
-    row2 = st.columns(3)
+    c1 = st.columns(4)
+    c2 = st.columns(3)
 
-    colors = ["#06b6d4","#22c55e","#f97316","#3b82f6","#8b5cf6","#ec4899","#4f46e5"]
-    for col,(title,val) in zip(row1+row2, zip([k[0] for k in kpis],[k[1] for k in kpis], strict=False)):
-        color = random.choice(colors)
-        pct = random.randint(25,90)
+    bars = ["#3b82f6","#f97316","#8b5cf6","#06b6d4","#22c55e","#ec4899","#4f46e5","#facc15"]
+
+    for col,(title,val) in zip(c1+c2,stats):
+        bar=random.choice(bars)
+        pct=random.randint(30,90)
         col.markdown(f"""
         <div class='metric-card'>
           <div class='metric-title'>{title}</div>
-          <div class='metric-value'>{val}</div>
-          <div class='progress-bar' style='background:{color}; width:{pct}%'></div>
+          <div class='metric-value' style='color:{bar};'>{val}</div>
+          <div class='progress-bar' style='--target:{pct}%;background:{bar};width:{pct}%'></div>
         </div>
-        """, unsafe_allow_html=True)
-
-    alert_section()
+        """,unsafe_allow_html=True)
 
     st.markdown("---")
     st.markdown("### TOP 5 PRIORITY LEADS")
-    st.markdown("*Highest business value leads with nearest SLA expiry.*", unsafe_allow_html=True)
+    st.markdown("*High-value leads nearing SLA deadline, prioritized automatically internally.*",unsafe_allow_html=True)
 
-    scored = [{"Name":l.name,"Value":l.estimate_value,"Time Left":l.time_left,"Score":random.randint(65,99)} for l in leads]
-    dfp = pd.DataFrame(scored).sort_values("Value",ascending=False).head(5)
-
-    pr_cols = st.columns(5)
-    for px,(_,l) in zip(pr_cols,dfp.iterrows()):
-        px.markdown(f"""
+    dfp = pd.DataFrame([{"n":l.name,"v":l.estimate_value,"t":l.time_left,"s":l.score} for l in leads]).sort_values("v",ascending=False).head(5)
+    cols = st.columns(len(list(dfp.iterrows())))
+    for col,(_,l) in zip(cols,dfp.iterrows()):
+        col.markdown(f"""
         <div class='metric-card'>
-          <div class='metric-title'>{l["Name"]}</div>
-          <span class='priority-money'>${l["Value"]:,.2f}</span><br>
-          <span class='priority-time'>{l["Time Left"]} hrs left</span><br>
-          <span class='lead-chip' style='background:white;color:black;'>Score: {l["Score"]}</span>
+          <div class='metric-title'>{l['n']}</div>
+          <span class='priority-money'>${l['v']:,.2f}</span><br>
+          <span class='priority-time'>{l['t']} hrs left</span><br>
+          <span class='lead-chip' style='background:white;color:black;'>Internal Score: {l['s']}</span>
         </div>
-        """, unsafe_allow_html=True)
+        """,unsafe_allow_html=True)
 
     st.markdown("---")
-    st.markdown("### ALL LEADS")
-    st.markdown("*Expand any lead to edit, assign owner, and update status.*", unsafe_allow_html=True)
-
-    status_options = ["CAPTURED","QUALIFIED","INSPECTED","ESTIMATE_SENT","AWARDED","OVERDUE"]
-
     for l in leads:
-        with st.expander(f"Lead #{l.id} — {l.name}"):
-            new_status = st.selectbox("Stage Status", status_options, index=0, key=f"status_{l.id}")
-            new_owner = st.selectbox("Lead Owner", ["Estimator","Adjuster","Tech","Admin","UNASSIGNED"], index=4, key=f"owner_{l.id}")
-            new_cost = st.number_input("Cost Per Lead ($)", value=l.cost_to_acquire, key=f"cost_{l.id}")
-            new_val = st.number_input("Estimate Job Value ($)", value=l.estimate_value, key=f"value_{l.id}")
+        with st.expander(f"Lead #{l.id} : {l.name}"):
+            new_status = st.selectbox("Status",["CAPTURED","QUALIFIED","INSPECTED","ESTIMATE_SENT","AWARDED","OVERDUE"],index=0,key=f"s_{l.id}")
+            owner = st.selectbox("Assign Owner",["Estimator","Adjuster","Tech","Admin","Viewer","UNASSIGNED"],index=5,key=f"o_{l.id}")
+            cost = st.number_input("Cost To Acquire",value=l.cost_to_acquire,key=f"cpa_{l.id}")
+            val = st.number_input("Estimate Value",value=l.estimate_value,key=f"val_{l.id}")
 
-            if st.button("Save Update", key=f"save_{l.id}"):
-                s2 = SessionLocal()
+            if st.button("Save", key=f"save_{l.id}"):
+                s=SessionLocal()
                 try:
-                    dblead = s2.query(Lead).filter(Lead.id==l.id).first()
-                    old = dblead.status
-                    dblead.status = new_status
-                    dblead.owner = new_owner
-                    dblead.cost_to_acquire = new_cost or 0
-                    dblead.estimate_value = new_val or 0
-                    dblead.converted = True if new_status=="AWARDED" else False
-                    s2.add(LeadHistory(lead_id=l.id, updated_by=st.session_state.user, old_status=old, new_status=new_status, note="Updated via UI"))
-                    s2.commit()
-                    st.success("Lead updated ✅")
-                except Exception:
-                    s2.rollback()
-                finally:
-                    s2.close()
-
-# ---------------- CPA/ROI ----------------
-def cpa_section():
-    leads = get_filtered_leads()
-    marketing_spend = sum((l.cost_to_acquire or 0) for l in leads)
-    conversions = sum(1 for l in leads if l.status=="AWARDED" or l.converted)
-    cpa = marketing_spend/conversions if conversions else 0
-    roi = sum(l.estimate_value or 0 for l in leads) - marketing_spend
-    roi_pct = round((roi/marketing_spend*100),1) if marketing_spend else 0
-
-    st.markdown("## 💰 CPA & ROI")
-    row = st.columns(4)
-    for c,(title,val,color) in zip(row,[
-        ("Total Spend",f"${marketing_spend:,.2f}",None),
-        ("Conversions",conversions,None),
-        ("CPA",f"${cpa:,.2f}",None),
-        ("ROI",f"{roi_pct}% (${roi:,.2f})",None)
-    ]):
-        c.markdown(f"<div class='metric-card'><div class='metric-title'>{title}</div><div class='metric-value'>{val}</div></div>", unsafe_allow_html=True)
-
-    fig = plt.figure()
-    plt.plot(["Spend","Conversions"],[marketing_spend,conversions])
-    st.pyplot(fig)
+                    ll=s.query(Lead).filter(Lead.id==l.id).first()
+                    old=ll.status
+                    ll.status=new_status
+                    ll.owner=owner
+                    ll.cost_to_acquire=cost or 0
+                    ll.estimate_value=val or 0
+                    ll.converted=True if new_status=="AWARDED" else False
+                    s.add(LeadHistory(lead_id=l.id,updated_by=st.session_state.user,old_status=old,new_status=new_status,note="Status Updated"))
+                    s.commit()
+                    st.success("Saved ✅")
+                except:
+                    s.rollback()
+                finally:s.close()
+                st.cache_data.clear()
+                st.rerun()
 
 # ---------------- ANALYTICS ----------------
-def analytics_section():
+elif st.session_state.page=="analytics":
     st.markdown("## 📊 Analytics")
-    leads = get_filtered_leads()
-    df = pd.DataFrame([{"Lead":l.name,"Stage":l.status,"Owner":l.owner,"Spend":l.cost_to_acquire,"Value":l.estimate_value} for l in leads])
+    st.markdown("*Lead behavior, source performance, SLA trend, and business values per stage.*",unsafe_allow_html=True)
+
+    df = pd.DataFrame([{"Lead":l.name,"Stage":l.status,"Owner":l.owner,"Spend":l.cost_to_acquire,"Value":l.estimate_value,"Time Left":l.time_left} for l in leads])
     st.dataframe(df)
 
-# ---------------- SETTINGS ----------------
-def settings_section():
-    st.markdown("## ⚙ Settings")
-    st.markdown("*Lead sources and role-based access configuration.*")
-    platforms = ["Referral","Website","Facebook","Instagram","TikTok","LinkedIn","Hotline","Campaign"]
-    for p in platforms:
-        st.checkbox(p, value=True, key=f"source_{p}")
+    st.markdown("### ⏳ SLA Overdue Trend")
+    fig=plt.figure()
+    plt.plot(df["Lead"], df["Time Left"])
+    st.pyplot(fig)
 
-    st.markdown("---")
-    st.markdown("### 🧑‍🤝‍🧑 User Roles (Admin Only)")
+# ---------------- SETTINGS ----------------
+elif st.session_state.page=="settings":
+    st.markdown("## ⚙ Settings Dashboard")
+    st.markdown("*Configure lead sources, team roles, notifications and permissions.*",unsafe_allow_html=True)
+
+    lead_sources = ["Referral","Website","Facebook","Instagram","TikTok","LinkedIn","Hotline","Google Ads","Walk-In","Campaign","YouTube","Twitter"]
+    enabled = []
+    for s in lead_sources:
+        if st.button(s,key=s,help="toggle source"):
+            enabled.append(s)
+
     if st.session_state.role=="Admin":
+        st.markdown("### 🧑 Role Management")
         s=SessionLocal()
         try:
             for u in s.query(User).all():
-                r=st.selectbox("Role",["Viewer","Estimator","Adjuster","Tech","Admin"], index=0, key=f"role_{u.username}")
-                if st.button("Save Role", key=f"rsave_{u.username}"):
+                r=st.selectbox("Role",["Viewer","Estimator","Adjuster","Tech","Admin"], index=0,key=f"r_{u.username}")
+                if st.button("Save Role",key=f"rs_{u.username}"):
                     s2=SessionLocal()
                     try:
                         uu=s2.query(User).filter(User.username==u.username).first()
                         uu.role=r
                         s2.commit()
-                        st.success("Saved ✅")
                     except: s2.rollback()
                     finally: s2.close()
         finally: s.close()
     else:
-        st.info("You are not an Admin, role editing disabled.")
+        st.info("Role Management locked (Admins only)")
 
 # ---------------- PROFILE ----------------
-def profile_section():
-    st.markdown("## 👤 Profile")
-    st.text_input("Full Name", value=st.session_state.get("full_name",st.session_state.user), key="full_name")
-    st.text(f"Role: {st.session_state.role}")
+elif st.session_state.page=="profile":
+    st.markdown("## 👤 User Profile")
+    st.markdown("*Manage name, role, and alert preferences.*",unsafe_allow_html=True)
 
-    st.checkbox("Enable SLA Alerts", value=True, key="alert_toggle")
-
+    st.text_input("Full Name", value=st.session_state.user,key="fn")
+    st.text(f"App Role: {st.session_state.role}")
+    st.checkbox("Enable Alerts",value=True,key="alerts")
     if st.button("Save Profile"):
         s=SessionLocal()
         try:
             u=s.query(User).filter(User.username==st.session_state.user).first()
-            u.full_name=st.session_state.full_name
-            u.alerts_enabled=st.session_state.alert_toggle
+            u.full_name=st.session_state.fn
+            u.alerts_enabled=st.session_state.alerts
             s.commit()
-            st.success("Profile Saved ✅")
+            st.success("Profile saved ✅")
         except: s.rollback()
         finally: s.close()
-
-# ---------------- ROUTER ----------------
-if st.session_state.page == "pipeline":
-    pipeline_section()
-elif st.session_state.page == "cpa":
-    cpa_section()
-elif st.session_state.page == "analytics":
-    analytics_section()
-elif st.session_state.page == "settings":
-    settings_section()
-elif st.session_state.page == "profile":
-    profile_section()
