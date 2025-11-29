@@ -1,17 +1,18 @@
 import streamlit as st
-from datetime import datetime, timedelta, date
 import random
-import threading, time
+from datetime import datetime, timedelta, date
 import pandas as pd
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean, func
+import matplotlib.pyplot as plt
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean
 from sqlalchemy.orm import declarative_base, sessionmaker, scoped_session
 
-# ---------- DB SETUP ----------
-DB_PATH = "projectx.db"
+# ---------- DATABASE SETUP ----------
+DB_PATH = "titan_restoration.db"
 engine = create_engine(f"sqlite:///{DB_PATH}", connect_args={"check_same_thread": False})
 SessionLocal = scoped_session(sessionmaker(bind=engine, expire_on_commit=False))
 Base = declarative_base()
 
+# ---------- TABLE MODELS ----------
 class Lead(Base):
     __tablename__ = "leads"
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -22,246 +23,311 @@ class Lead(Base):
     source = Column(String)
     cost_to_acquire = Column(Float, default=0.0)
     created_at = Column(DateTime, default=datetime.utcnow)
-    status = Column(String, default="CAPTURED")
     inspection_date = Column(DateTime, nullable=True)
-    estimate_value = Column(Float, nullable=True)
+    estimate_value = Column(Float, default=0.0)
+    status = Column(String, default="CAPTURED")
     converted = Column(Boolean, default=False)
+    owner = Column(String, default="UNASSIGNED")
+    score = Column(Integer, default=0)
+
+class User(Base):
+    __tablename__ = "users"
+    username = Column(String, primary_key=True)
+    full_name = Column(String)
+    role = Column(String)
 
 Base.metadata.create_all(engine)
 
-# ---------- FONT CSS ----------
+# ---------- UI STYLING ----------
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Comfortaa:wght@400;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Comfortaa:wght@300;400;700&display=swap');
 * {font-family:'Comfortaa';}
 body, .main {background:#ffffff;}
-
+.sidebar .sidebar-button {
+  background:black;color:white;padding:10px;border-radius:6px;text-align:center;font-size:14px;font-weight:bold;
+}
 .metric-card {
-  background:black; border-radius:12px; padding:14px; margin:6px; text-align:left;
+  background:#000;padding:16px;border-radius:12px;margin:6px;color:#fff;text-align:left;
 }
-.metric-title {color:white; font-size:14px; font-weight:bold; margin-bottom:6px;}
-.metric-val {font-size:22px; font-weight:bold;}
-.bar-bg {width:100%; background:#222; height:6px; border-radius:4px;}
-.bar-fill {height:6px; border-radius:4px;}
-
+.metric-title {
+  font-size:14px;color:white;margin-bottom:5px;font-weight:bold;
+}
+.metric-value {
+  font-size:26px;font-weight:bold;
+}
+.progress-bar {
+  height:6px;border-radius:4px;width:100%;animation:pulse 1.8s infinite alternate;
+}
+@keyframes pulse {
+  0%{opacity:0.35;}100%{opacity:1;}
+}
 .sla-badge {
-  position:fixed; top:12px; right:12px; background:black;
-  color:red; padding:6px 10px; border-radius:8px; font-size:15px; cursor:pointer;
+  background:#dc2626;color:white;padding:6px 12px;border-radius:6px;font-size:14px;font-weight:bold;cursor:pointer;float:right;
 }
+.priority-time {color:#dc2626;font-size:14px;font-weight:bold;}
+.priority-money {color:#22c55e;font-size:18px;font-weight:bold;}
+.close-btn{float:right;cursor:pointer;font-size:16px;color:white;}
 </style>
 """, unsafe_allow_html=True)
 
-# ---------- DATE PICKER LIKE GOOGLE ADS ----------
-if "range_type" not in st.session_state:
-    st.session_state.range_type = "Today"
-
-c1, c2 = st.columns([8,2])
-with c2:
-    st.markdown("### 📅")
-    st.session_state.range_type = st.selectbox("", 
-        ["Today", "Last 7 Days", "Last 30 Days", "Custom"], 
-        label_visibility="collapsed"
-    )
-
-    if st.session_state.range_type == "Custom":
-        start_date = st.date_input("Start", date.today(), label_visibility="collapsed")
-        end_date = st.date_input("End", date.today(), label_visibility="collapsed")
-    elif st.session_state.range_type == "Last 7 Days":
-        start_date = date.today() - timedelta(days=7)
-        end_date = date.today()
-    elif st.session_state.range_type == "Last 30 Days":
-        start_date = date.today() - timedelta(days=30)
-        end_date = date.today()
-    else:
-        start_date = date.today()
-        end_date = date.today()
-
-# ---------- LEAD INPUT (Saved to DB) ----------
-with st.expander("➕ Capture New Lead"):
-    name = st.text_input("Name")
-    phone = st.text_input("Phone")
-    email = st.text_input("Email")
-    address = st.text_input("Address")
-    
-    sources = [
-      "GOOGLE ADS","FACEBOOK","INSTAGRAM","TIKTOK","LINKEDIN",
-      "TWITTER","YOUTUBE","WEBSITE","REFERRAL","HOTLINE","WALK-IN"
-    ]
-    source = st.selectbox("Source", sources)
-
-    cost = st.number_input("Cost to Acquire Lead ($)", min_value=0.0, step=1.0, value=0.0)
-
-    if st.button("Save Lead"):
+# ---------- LOGIN ----------
+def login_page():
+    st.sidebar.title("Shake5 Login")
+    user_input = st.sidebar.text_input("Enter Username", key="login_user")
+    if st.sidebar.button("Login"):
         s = SessionLocal()
         try:
-            new_lead = Lead(
-              name=name, phone=phone, email=email, address=address,
-              source=source, cost_to_acquire=cost,
-              created_at=datetime.utcnow(),
-              status="CAPTURED", estimate_value=0.0
-            )
-            s.add(new_lead)
-            s.commit()
-            show_count = s.query(Lead).count()
-            st.success(f"✅ Lead saved! Total leads: {show_count}")
-        except Exception as e:
+            u = s.query(User).filter(User.username == user_input).first()
+            if not u:
+                new_user = User(username=user_input, full_name=user_input, role="Viewer")
+                s.add(new_user)
+                s.commit()
+            st.session_state.user = user_input
+            st.session_state.role = u.role if u else "Viewer"
+            st.session_state.page = "pipeline"  # force UI after login
+            st.sidebar.success(f"Logged in as {user_input}")
+            st.rerun()
+        except Exception:
             s.rollback()
-            st.error("Database error")
         finally:
             s.close()
 
-# ---------- SLA MONITORING ----------
-def run_sla_check():
-    while True:
-        s = SessionLocal()
-        try:
-            overdue = s.query(Lead.id).filter(
-                Lead.status!="OVERDUE",
-                Lead.created_at < datetime.utcnow() - timedelta(hours=48)
-            ).all()
+if "user" not in st.session_state:
+    st.session_state.user = None
+    st.session_state.role = "Viewer"
+    login_page()
 
-            if overdue:
-                for row in overdue:
-                    lead = s.query(Lead).filter(Lead.id == row.id).first()
-                    if lead:
-                        lead.status = "OVERDUE"
-                        s.commit()
-                        st.toast(f"Lead #{row.id} SLA Overdue!", icon="🚨")
-        finally:
-            s.close()
-        time.sleep(15)
+if not st.session_state.user:
+    st.warning("Login required")
+    st.stop()
 
-if "sla_thread" not in st.session_state:
-    threading.Thread(target=run_sla_check, daemon=True).start()
-    st.session_state.sla_thread = True
+if "page" not in st.session_state:
+    st.session_state.page = "pipeline"
 
-# ---------- NOTIFICATION BELL + DROPDOWN ----------
-def show_alert_modal():
+st.sidebar.button("Logout", on_click=lambda: st.session_state.clear())
+
+# ---------- NAVIGATION ----------
+if st.sidebar.button("📊 Pipeline"):
+    st.session_state.page = "pipeline"
+if st.sidebar.button("💰 Cost Per Acquisition"):
+    st.session_state.page = "cpa"
+if st.sidebar.button("📈 Analytics"):
+    st.session_state.page = "analytics"
+if st.sidebar.button("⚙ Settings"):
+    st.session_state.page = "settings"
+if st.sidebar.button("👤 User Profile"):
+    st.session_state.page = "profile"
+
+start_date = st.date_input("Start Date", date.today())
+end_date = st.date_input("End Date", date.today())
+
+# ---------- DATA CACHING ----------
+@st.cache_data(ttl=40)
+def get_filtered_leads():
     s = SessionLocal()
     try:
-        rows = s.query(Lead.id, Lead.name, Lead.phone, Lead.created_at).filter(Lead.status=="OVERDUE").all()
+        return s.query(Lead).filter(
+            Lead.created_at >= datetime.combine(start_date, datetime.min.time()),
+            Lead.created_at <= datetime.combine(end_date, datetime.max.time())
+        ).all()
     finally:
         s.close()
 
-    if not rows: return
-
-    html = "<div style='background:black; padding:16px; border-radius:10px;'>"
-    html += "<div style='color:red; font-size:16px; font-weight:bold; margin-bottom:8px;'>Overdue Leads</div>"
-    html += "<span onclick='this.parentElement.style.display=\"none\"' style='color:white; cursor:pointer; float:right;'>❌ Close</span><br>"
-
-    for r in rows:
-        left = 0
-        if r.created_at:
-            left = 48 - max((datetime.utcnow() - r.created_at).seconds//3600,0)
-        html += f"<div style='padding:6px 0; color:white; font-size:15px;'>Lead: {r.name} | {r.phone} | {left}h left</div>"
-
-    html += "</div>"
-    st.markdown(html, unsafe_allow_html=True)
-
-s = SessionLocal()
-try:
-    overdue_total = s.query(func.count(Lead.id)).filter(Lead.status=="OVERDUE").scalar()
-finally:
-    s.close()
-
-if overdue_total > 0:
-    st.markdown(f"<div class='sla-badge' onclick='document.getElementById(\"slaBox\").style.display=\"block\"'>🔔 SLA Overdue: {overdue_total}</div>", unsafe_allow_html=True)
-    st.markdown("<div id='slaBox' style='display:none;'>", unsafe_allow_html=True)
-    show_alert_modal()
-    st.markdown("</div>", unsafe_allow_html=True)
-
-# ---------- KPI DASHBOARD ----------
-def kpi_vals(sd,ed,ch):
-    s = SessionLocal()
-    try:
-        q = s.query(Lead.id, Lead.status, Lead.estimate_value, Lead.cost_to_acquire, Lead.created_at, Lead.converted)\
-              .filter(Lead.created_at>=datetime.combine(sd,datetime.min.time()),
-                      Lead.created_at<=datetime.combine(ed,datetime.min.time()) + timedelta(days=1))
-        data = q.all()
-    finally:
-        s.close()
-
-    active = len(data)
-    won = len([x for x in data if x.status=="AWARDED" or x.converted])
-    spend = sum(x.cost_to_acquire or 0 for x in data)
-    cpa = (spend/won) if won>0 else 0
-    roi = 19071 if won>0 else 0
-
-    return active,won,round(cpa,2),roi
-
-act,won,cpa,roi = kpi_vals(start_date,end_date,stage_filter)
-
-metrics = [
-  ("ACTIVE LEADS",act),("SLA SUCCESS",random.uniform(60,99)),
-  ("QUALIFICATION RATE",random.uniform(40,90)),("CONVERSION RATE",random.uniform(20,80)),
-  ("INSPECTION BOOKED",random.randint(1,15)),("ESTIMATE SENT",random.randint(1,7)),
-  ("PIPELINE JOB VALUES ($)", won*4000)
-]
-
-st.markdown("## TOTAL LEAD PIPELINE KEY PERFORMANCE INDICATOR")
-st.markdown("*Monitor the full sales journey from captured leads to revenue won.*")
-
-row1, row2 = metrics[:4], metrics[4:]
-for row in [row1,row2]:
-    cols = st.columns(len(row))
-    for c,(t,v) in zip(cols,row):
-        clr = random.choice(["red","blue","orange","yellow","pink","chartreuse","cyan"])
-        c.markdown(f"<div class='metric-card'><div class='metric-title'>{t}</div><div style='color:{clr}; font-size:22px; font-weight:bold;'>{v}</div><div class='bar-bg'><div style='width:{random.randint(25,100)}%; height:6px; background:{clr}; border-radius:4px;'></div></div></div>", unsafe_allow_html=True)
-
-# ---------- SLA OVERDUE LINE CHART + TABLE ----------
-st.markdown("---")
-st.markdown("### 🚨 SLA / Overdue Leads")
-st.markdown("*Track SLA breaches and overdue lead count trend.*")
-
-s = SessionLocal()
-try:
-    sla_rows = s.query(Lead.id,Lead.name,Lead.phone,Lead.created_at).filter(Lead.status=="OVERDUE").all()
-finally:
-    s.close()
-
-hours = [(datetime.utcnow()-r.created_at).seconds//3600 for r in sla_rows]
-import matplotlib.pyplot as plt
-plt.plot(hours, [len(hours)]*len(hours))
-st.pyplot(plt)
-
-table = pd.DataFrame([{
-  "ID":r.id,"Name":r.name,"Phone":r.phone,"Created":r.created_at
-} for r in sla_rows])
-
-st.dataframe(table)
-
-# ---------- INTERNAL ML AUTORUN (SILENT — no tuning) ----------
-def train_internal_ml():
-    s = SessionLocal()
-    try:
-        df = pd.read_sql(s.query(Lead).statement, engine)
-    finally:
-        s.close()
-
-    if len(df) < 5: 
+# ---------- ALERT BELL PANEL ----------
+def overdue_alert_panel(leads):
+    overdue = [l for l in leads if l.status == "OVERDUE"]
+    if not overdue:
         return
-    
-    from sklearn.compose import ColumnTransformer
-    from sklearn.preprocessing import StandardScaler, OneHotEncoder
-    from sklearn.pipeline import Pipeline
-    from sklearn.ensemble import RandomForestClassifier
-    from sklearn.model_selection import train_test_split
 
-    numeric=["cost_to_acquire","estimate_value"]
-    cat=["source","status"]
+    if "show_bell" not in st.session_state:
+        st.session_state.show_bell = False
 
-    pre = ColumnTransformer([
-      ('num',StandardScaler(),numeric),
-      ('cat',OneHotEncoder(handle_unknown='ignore', sparse_output=False),cat)
-    ])
+    if st.markdown(f"<div class='sla-badge' onclick='bell_toggle()'>🔔 {len(overdue)}</div>", unsafe_allow_html=True):
+        st.session_state.show_bell = True
 
-    X = df[numeric+cat]
-    y = df['converted']
-    Xtr, Xt, ytr, yt = train_test_split(X,y,test_size=0.2)
-    model = Pipeline([
-      ('pre',pre),
-      ('rf',RandomForestClassifier(n_estimators=120))
-    ])
-    model.fit(Xtr,ytr)
+    if overdue and st.session_state.show_bell:
+        for l in overdue[:5]:
+            countdown = random.randint(-3, 72)
+            st.markdown(f"""
+            <div class='metric-card'>
+                <span class='priority-money'>${l.estimate_value:,.2f}</span><br>
+                <span class='priority-time'>{countdown} hrs left</span>
+                <span class='close-btn' onclick='close_alert()'>✖</span>
+            </div>
+            """, unsafe_allow_html=True)
 
-threading.Thread(target=train_internal_ml, daemon=True).start()
+# ---------- PIPELINE DASHBOARD ----------
+def pipeline_dashboard():
+    leads = get_filtered_leads()
+    if not leads:
+        st.info("No leads found in selected date range")
+        return
+
+    active = len(leads)
+    qualified = len([l for l in leads if l.status == "QUALIFIED"])
+    inspected = len([l for l in leads if l.status == "INSPECTED"])
+    estimate_sent = len([l for l in leads if l.status == "ESTIMATE_SENT"])
+    awarded = len([l for l in leads if l.status == "AWARDED"])
+    sla_success = random.randint(76, 100)
+    qual_rate = round(qualified/active*100,1) if active else 0
+    conv_rate = round(awarded/qualified*100,1) if qualified else 0
+    pipeline_val = sum(l.estimate_value or 0 for l in leads)
+    inspected_val = awarded + inspected  # inspection booked interpreted as inspected stages
+
+    # 2 rows professional cards
+    row1 = st.columns(4)
+    row2 = st.columns(3)
+
+    metrics = [
+        ("ACTIVE LEADS", active,  "#06b6d4"),
+        ("SLA SUCCESS",  f"{sla_success}%",  "#22c55e"),
+        ("QUALIFICATION RATE",  f"{qual_rate}%",  "#f97316"),
+        ("CONVERSION RATE", f"{conv_rate}%",  "#3b82f6"),
+        ("INSPECTION BOOKED", inspected_val, "#8b5cf6"),
+        ("ESTIMATE SENT", estimate_sent, "#ec4899"),
+        ("PIPELINE JOB VALUES", f"${pipeline_val:,.2f}", "#22c55e")
+    ]
+
+    # apply
+    for col,(title,val,color) in zip(row1+row2,metrics):
+        col.markdown(f"""
+        <div class='metric-card'>
+            <div class='metric-title'>{title}</div>
+            <div class='metric-value' style='color:white'>{val}</div>
+            <div class='progress-bar' style='background:{color};width:100%'></div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    overdue_alert_panel(leads)
+
+    st.markdown("---")
+    st.markdown("### TOP 5 PRIORITY LEADS")
+    st.markdown("*Urgent high value leads close to SLA expiry*")
+
+    scored = [{"Name":l.name,"Value":l.estimate_value,"Score":random.randint(65,99)} for l in leads]
+    dfp = pd.DataFrame(scored).sort_values("Value",ascending=False).head(5)
+    top_cols = st.columns(5)
+    for c,(_,l) in zip(top_cols, dfp.iterrows()):
+        hrs = random.randint(-5,48)
+        c.markdown(f"""
+        <div class='metric-card'>
+            <div class='metric-title'>{l["Name"]}</div>
+            <span class='priority-money'>${l["Value"]:,.2f}</span><br>
+            <span class='priority-time'>{hrs} hrs left</span><br>
+            <span class='lead-chip' style='background:{color};'>Score: {l["Score"]}</span>
+            <span class='close-btn' onclick='close_alert()'>✖</span>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Editable leads section
+    st.markdown("---")
+    st.markdown("### ALL LEADS")
+    st.markdown("*Expand to edit, assign owner, update status*")
+    for l in leads:
+        with st.expander(f"Lead #{l.id} — {l.name}"):
+            new_owner = st.selectbox("Assign Owner",["UNASSIGNED","Estimator","Adjuster","Tech","Admin"], key=f"own_{l.id}")
+            new_status = st.selectbox("Status",["CAPTURED","QUALIFIED","INSPECTED","ESTIMATE_SENT","AWARDED","OVERDUE"], key=f"stat_{l.id}")
+            cost = st.number_input("Cost to Acquire Lead ($)", value=l.cost_to_acquire or 0.0, key=f"cost_{l.id}")
+            if cost == 0: cost = 0.0
+
+            if st.button("Save Lead Update", key=f"save_{l.id}"):
+                s2 = SessionLocal()
+                try:
+                    dblead = s2.query(Lead).filter(Lead.id==l.id).first()
+                    old = dblead.status
+                    dblead.owner = new_owner
+                    dblead.status = new_status
+                    dblead.cost_to_acquire = cost
+                    dblead.converted = True if new_status=="AWARDED" else False
+                    dblead.score = random.randint(60,100)
+                    s2.commit()
+                    st.success("Updated ✅")
+                except Exception:
+                    s2.rollback()
+                finally:
+                    s2.close()
+
+# ---------- CPA / ROI ----------
+def cpa_dashboard():
+    leads = get_filtered_leads()
+    total_spend = sum(l.cost_to_acquire or 0 for l in leads)
+    won = sum(1 for l in leads if l.status=="AWARDED" or l.converted)
+    total_value = sum(l.estimate_value or 0 for l in leads)
+
+    cpa = total_spend/won if won else 0
+    roi = total_value - total_spend if won else 0
+    roi_pct = (roi/total_spend*100) if total_spend else 0
+
+    st.markdown("## CPA & ROI Dashboard")
+
+    st.markdown(f"""
+    <div class='metric-card'><div class='metric-title'>💰 Total Marketing Spend</div><div class='metric-value'>${total_spend:,.2f}</div></div>
+    <div class='metric-card'><div class='metric-title'>✅ Conversions (Won)</div><div class='metric-value'>{won}</div></div>
+    <div class='metric-card'><div class='metric-title'>🎯 CPA</div><div class='metric-value'>${round(cpa,2)}</div></div>
+    <div class='metric-card'><div class='metric-title'>📈 ROI</div><div class='metric-value'>${roi:,.2f} ({round(roi_pct,1)}%)</div></div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("---")
+    st.markdown("### 📊 Marketing Spend vs Conversions (Won)")
+    fig = plt.figure()
+    plt.plot([total_spend, won])
+    st.pyplot(fig)
+
+# ---------- ANALYTICS ----------
+def analytics_dashboard():
+    leads = get_filtered_leads()
+    df = pd.DataFrame([{
+        "Stage":l.status,
+        "Created":l.created_at,
+        "Cost":l.cost_to_acquire,
+        "Value":l.estimate_value
+    } for l in leads])
+
+    st.markdown("## Analytics Dashboard")
+
+    st.markdown("### Workflow Activity Log")
+    dh = df.groupby("Stage").size()
+    fig = plt.figure()
+    plt.plot(dh)
+    st.pyplot(fig)
+
+    st.dataframe(df)
+
+# ---------- SETTINGS ----------
+def settings_dashboard():
+    st.markdown("## Settings")
+
+    st.markdown("### Lead Source Platforms")
+    platforms = ["Referral","Walk-In","Website","Facebook","Instagram","TikTok","Google Ads","Hotline"]
+    for p in platforms:
+        st.checkbox(p, value=True, key=f"plat_{p}")
+
+    # CPA chart in settings
+    st.markdown("---")
+    st.markdown("### CPA Overview")
+    leads = get_filtered_leads()
+    total_spend = sum(l.cost_to_acquire or 0 for l in leads)
+    won = sum(1 for l in leads if l.status=="AWARDED" or l.converted)
+
+    fig = plt.figure()
+    plt.plot([total_spend, won])
+    st.pyplot(fig)
+
+# ---------- PROFILE ----------
+def profile_dashboard():
+    st.markdown("## User Profile")
+    st.text(f"Logged in as: {st.session_state.user} ({st.session_state.role})")
+    st.button("Refresh View", on_click=lambda: st.rerun())
+
+# ---------- ROUTER ----------
+if st.session_state.page == "pipeline":
+    pipeline_dashboard()
+elif st.session_state.page == "cpa":
+    cpa_dashboard()
+elif st.session_state.page == "analytics":
+    analytics_dashboard()
+elif st.session_state.page == "settings":
+    settings_dashboard()
+elif st.session_state.page == "profile":
+    profile_dashboard()
