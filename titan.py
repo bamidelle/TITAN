@@ -724,6 +724,163 @@ def page_analytics():
     else:
         st.info("No overdue leads currently.")
 
+# CPA & ROI page
+def page_cpa_roi():
+    st.markdown("<div class='header'>💰 CPA & ROI</div>", unsafe_allow_html=True)
+    st.markdown("<em>Total Marketing Spend vs Conversions and ROI calculations.</em>", unsafe_allow_html=True)
+    df = leads_df.copy()
+    if df.empty:
+        st.info("No leads")
+        return
+    total_spend = float(df["ad_cost"].sum())
+    won_df = df[df["stage"] == "Won"]
+    conversions = len(won_df)
+    cpa = (total_spend / conversions) if conversions else 0.0
+    revenue = float(won_df["estimated_value"].sum())
+    roi = revenue - total_spend
+    roi_pct = (roi / total_spend * 100) if total_spend else 0.0
+    c1, c2, c3, c4 = st.columns(4)
+    c1.markdown(f"<div class='kpi-card'><div class='kpi-title'>Total Marketing Spend</div><div class='kpi-number' style='color:{KPI_COLORS[0]}'>${total_spend:,.2f}</div></div>", unsafe_allow_html=True)
+    c2.markdown(f"<div class='kpi-card'><div class='kpi-title'>Conversions (Won)</div><div class='kpi-number' style='color:{KPI_COLORS[1]}'>{conversions}</div></div>", unsafe_allow_html=True)
+    c3.markdown(f"<div class='kpi-card'><div class='kpi-title'>CPA</div><div class='kpi-number' style='color:{KPI_COLORS[3]}'>${cpa:,.2f}</div></div>", unsafe_allow_html=True)
+    c4.markdown(f"<div class='kpi-card'><div class='kpi-title'>ROI</div><div class='kpi-number' style='color:{KPI_COLORS[6]}'>${roi:,.2f} ({roi_pct:.1f}%)</div></div>", unsafe_allow_html=True)
+    st.markdown("---")
+    # chart: spend vs conversions by source
+    agg = df.groupby("source").agg(total_spend=("ad_cost","sum"), conversions=("stage", lambda s: (s=="Won").sum())).reset_index()
+    if not agg.empty:
+        fig = px.bar(agg, x="source", y=["total_spend","conversions"], barmode="group", title="Total Spend vs Conversions by Source")
+        st.plotly_chart(fig, use_container_width=True)
+
+# ML internal page
+def page_ml_internal():
+    st.markdown("<div class='header'>🧠 Internal ML — Lead Scoring</div>", unsafe_allow_html=True)
+    st.markdown("<em>Model runs internally and writes score back to leads. No user tuning exposed.</em>", unsafe_allow_html=True)
+    if st.button("Train model (internal)"):
+        with st.spinner("Training..."):
+            try:
+                acc, msg = train_internal_model()
+                if acc is None:
+                    st.error(f"Training aborted: {msg}")
+                else:
+                    st.success(f"Model trained (accuracy approx): {acc:.3f}")
+            except Exception as e:
+                st.error("Training failed: " + str(e))
+                st.write(traceback.format_exc())
+    model, cols = load_internal_model()
+    if model:
+        st.success("Model available (internal)")
+        if st.button("Score all leads and persist scores"):
+            df = leads_to_df()
+            scored = score_dataframe(df.copy(), model, cols)
+            s = get_session()
+            try:
+                for _, r in scored.iterrows():
+                    lead = s.query(Lead).filter(Lead.lead_id == r["lead_id"]).first()
+                    if lead:
+                        lead.score = float(r["score"])
+                        s.add(lead)
+                s.commit()
+                st.success("Scores persisted to DB")
+            except Exception as e:
+                s.rollback()
+                st.error("Failed to persist scores: " + str(e))
+            finally:
+                s.close()
+        if st.checkbox("Preview top scored leads"):
+            df = leads_to_df()
+            scored = score_dataframe(df.copy(), model, cols).sort_values("score", ascending=False).head(20)
+            st.dataframe(scored[["lead_id","source","stage","estimated_value","ad_cost","score"]])
+# Settings page: user & role management, weights (priority), audit trail
+def page_settings():
+    st.markdown("<div class='header'>⚙️ Settings & User Management</div>", unsafe_allow_html=True)
+    st.markdown("<em>Add team users, set roles for role-based integration later.</em>", unsafe_allow_html=True)
+    st.subheader("Users")
+    users_df = get_users_df()
+    with st.form("add_user_form"):
+        uname = st.text_input("Username (unique)")
+        fname = st.text_input("Full name")
+        role = st.selectbox("Role", ["Admin","Estimator","Adjuster","Tech","Viewer"], index=0)
+        if st.form_submit_button("Add / Update User"):
+            if not uname:
+                st.error("Username required")
+            else:
+                add_user(uname.strip(), full_name=fname.strip(), role=role)
+                st.success("User saved")
+                st.experimental_rerun()
+    if not users_df.empty:
+        st.dataframe(users_df)
+    st.markdown("---")
+    st.subheader("Priority weight tuning (internal)")
+    wscore = st.slider("Model score weight", 0.0, 1.0, 0.6, 0.05)
+    wvalue = st.slider("Estimate value weight", 0.0, 1.0, 0.3, 0.05)
+    wsla = st.slider("SLA urgency weight", 0.0, 1.0, 0.1, 0.05)
+    baseline = st.number_input("Value baseline (for normalization)", value=5000.0)
+    if st.button("Save weights"):
+        st.session_state.weights = {"score_w": wscore, "value_w": wvalue, "sla_w": wsla, "value_baseline": baseline}
+        st.success("Weights updated (in session)")
+
+    st.markdown("---")
+    st.subheader("Audit Trail")
+    s = get_session()
+    try:
+        hist = s.query(LeadHistory).order_by(LeadHistory.timestamp.desc()).limit(200).all()
+        if hist:
+            hist_df = pd.DataFrame([{"lead_id":h.lead_id,"changed_by":h.changed_by,"field":h.field,"old":h.old_value,"new":h.new_value,"timestamp":h.timestamp} for h in hist])
+            st.dataframe(hist_df)
+        else:
+            st.info("No audit entries yet.")
+    finally:
+        s.close()
+
+# Exports page
+def page_exports():
+    st.markdown("<div class='header'>📤 Exports & Imports</div>", unsafe_allow_html=True)
+    st.markdown("<em>Export leads, import CSV/XLSX. Imported rows upsert by lead_id.</em>", unsafe_allow_html=True)
+    df = leads_to_df(None, None)
+    if not df.empty:
+        towrite = io.BytesIO()
+        df.to_excel(towrite, index=False, engine="openpyxl")
+        towrite.seek(0)
+        b64 = base64.b64encode(towrite.read()).decode()
+        href = f"data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}"
+        st.markdown(f'<a href="{href}" download="leads_export.xlsx">Download leads_export.xlsx</a>', unsafe_allow_html=True)
+    uploaded = st.file_uploader("Upload leads (CSV/XLSX) for import/upsert", type=["csv","xlsx"])
+    if uploaded:
+        try:
+            if uploaded.name.lower().endswith(".csv"):
+                df_in = pd.read_csv(uploaded)
+            else:
+                df_in = pd.read_excel(uploaded)
+            if "lead_id" not in df_in.columns:
+                st.error("File must include a lead_id column")
+            else:
+                count = 0
+                for _, r in df_in.iterrows():
+                    try:
+                        upsert_lead_record({
+                            "lead_id": str(r["lead_id"]),
+                            "created_at": pd.to_datetime(r.get("created_at")) if r.get("created_at") is not None else datetime.utcnow(),
+                            "source": r.get("source"),
+                            "contact_name": r.get("contact_name"),
+                            "contact_phone": r.get("contact_phone"),
+                            "contact_email": r.get("contact_email"),
+                            "property_address": r.get("property_address"),
+                            "damage_type": r.get("damage_type"),
+                            "assigned_to": r.get("assigned_to"),
+                            "notes": r.get("notes"),
+                            "estimated_value": float(r.get("estimated_value") or 0.0),
+                            "ad_cost": float(r.get("ad_cost") or 0.0),
+                            "stage": r.get("stage") or "New",
+                            "converted": bool(r.get("converted") or False)
+                        }, actor="admin")
+                        count += 1
+                    except Exception:
+                        continue
+                st.success(f"Imported/Upserted {count} rows.")
+        except Exception as e:
+            st.error("Failed to import: " + str(e))
+
+
 
 # ---------------- UPDATED ROUTER SECTION (WORKING) ----------------
 if page == "Dashboard":
