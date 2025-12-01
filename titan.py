@@ -553,6 +553,58 @@ def alerts_ui():
 # PAGES
 # ----------------------
 
+# Lead Capture page
+def page_lead_capture():
+    st.markdown("<div class='header'>📇 Lead Capture</div>", unsafe_allow_html=True)
+    st.markdown("<em>Create or upsert a lead. All inputs are saved for reporting and CPA calculations.</em>", unsafe_allow_html=True)
+    with st.form("lead_capture_form", clear_on_submit=True):
+        lead_id = st.text_input("Lead ID", value=f"L{int(datetime.utcnow().timestamp())}")
+        source = st.selectbox("Lead Source", ["Google Ads","Organic Search","Referral","Phone","Insurance","Facebook","Instagram","LinkedIn","Other"])
+        source_details = st.text_input("Source details (UTM / notes)", placeholder="utm_source=google...")
+        contact_name = st.text_input("Contact name")
+        contact_phone = st.text_input("Contact phone")
+        contact_email = st.text_input("Contact email")
+        property_address = st.text_input("Property address")
+        damage_type = st.selectbox("Damage type", ["water","fire","mold","contents","reconstruction","other"])
+        assigned_to = st.text_input("Assigned to (username)")
+        estimated_value = st.number_input("Estimated value (USD)", min_value=0.0, value=0.0, step=100.0)
+        ad_cost = st.number_input("Cost to acquire lead (USD)", min_value=0.0, value=0.0, step=1.0)
+        sla_hours = st.number_input("SLA hours (first response)", min_value=1, value=DEFAULT_SLA_HOURS, step=1)
+        notes = st.text_area("Notes")
+        submitted = st.form_submit_button("Create / Update Lead")
+        if submitted:
+            try:
+                upsert_lead_record({
+                    "lead_id": lead_id.strip(),
+                    "created_at": datetime.utcnow(),
+                    "source": source,
+                    "source_details": source_details,
+                    "contact_name": contact_name,
+                    "contact_phone": contact_phone,
+                    "contact_email": contact_email,
+                    "property_address": property_address,
+                    "damage_type": damage_type,
+                    "assigned_to": assigned_to or None,
+                    "estimated_value": float(estimated_value or 0.0),
+                    "ad_cost": float(ad_cost or 0.0),
+                    "sla_hours": int(sla_hours or DEFAULT_SLA_HOURS),
+                    "sla_entered_at": datetime.utcnow(),
+                    "notes": notes
+                }, actor="admin")
+                st.success(f"Lead {lead_id} saved.")
+                st.experimental_rerun()
+            except Exception as e:
+                st.error("Failed to save lead: " + str(e))
+                st.write(traceback.format_exc())
+
+    st.markdown("---")
+    st.subheader("Recent leads")
+    df = leads_to_df(None, None)
+    if df.empty:
+        st.info("No leads yet.")
+    else:
+        st.dataframe(df.sort_values("created_at", ascending=False).head(50))
+
 
 def page_dashboard():
     # kept for reuse but not exposed in nav
@@ -632,7 +684,7 @@ def page_pipeline_board():
 if page == "Dashboard":
     page_dashboard()
 elif page == "Lead Capture":
-    page_leads()
+    page_leads_capture()
 elif page == "Pipeline Board":
     page_pipeline_board()
 elif page == "Analytics":
