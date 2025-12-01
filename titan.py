@@ -683,8 +683,8 @@ def page_pipeline_board():
     # I PASTED THE REST OF PRIORITY TOP 5 LEADS HERE WHICH ENDED AT ANALYTICS PAGE
     st.markdown("---")
    # Priority leads Top 5
-        st.markdown("### TOP 5 PRIORITY LEADS")
-        st.markdown("<em>Highest urgency leads by priority score (0–1). Address these first.</em>", unsafe_allow_html=True)
+    st.markdown("### TOP 5 PRIORITY LEADS")
+    st.markdown("<em>Highest urgency leads by priority score (0–1). Address these first.</em>", unsafe_allow_html=True)
         priority_list = []
         for _, row in df.iterrows():
             try:
