@@ -628,6 +628,7 @@ def page_pipeline_board():
         stage_counts = df["stage"].value_counts().reindex(PIPELINE_STAGES, fill_value=0)
         pie_df = pd.DataFrame({"status": stage_counts})
 
+# ---------------- UPDATED ROUTER SECTION (WORKING) ----------------
 if page == "Pipeline Board":
     page_pipeline_board()
 elif page == "Lead Capture":
@@ -644,4 +645,5 @@ elif page == "Exports":
     page_exports()
 else:
     st.info("Page not implemented yet.")
+
 
