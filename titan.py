@@ -685,16 +685,21 @@ st.markdown("---")
 st.markdown("### TOP 5 PRIORITY LEADS")
 st.markdown("<em>Highest urgency leads by priority score (0–1). Address these first.</em>", unsafe_allow_html=True)
 
-priority_list = []
-for _, row in df.iterrows():
-    try:
-        ml_prob = float(row.get("win_prob")) if row.get("win_prob") is not None else None
-    except Exception:
-        ml_prob = None
-    try:
-        score = compute_priority_for_lead_row(row, weights, ml_prob=ml_prob)
-    except Exception:
-        score = 0.0
+# Make sure df exists
+if 'df' not in globals():
+    st.error("DataFrame 'df' is not defined yet!")
+else:
+    priority_list = []
+    for _, row in df.iterrows():
+        try:
+            ml_prob = float(row.get("win_prob")) if row.get("win_prob") is not None else None
+        except Exception:
+            ml_prob = None
+        try:
+            score = compute_priority_for_lead_row(row, weights, ml_prob=ml_prob)
+        except Exception:
+            score = 0.0
+        # ... rest of your code
 
     sla_sec, overdue = calculate_remaining_sla(row.get("sla_entered_at") or row.get("created_at"), row.get("sla_hours"))
     time_left_h = sla_sec / 3600.0 if sla_sec not in (None, float("inf")) else 9999.0
