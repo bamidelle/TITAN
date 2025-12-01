@@ -632,7 +632,7 @@ def page_pipeline_board():
 if page == "Dashboard":
     page_dashboard()
 elif page == "Lead Capture":
-    page_lead_capture()
+    page_lead()
 elif page == "Pipeline Board":
     page_pipeline_board()
 elif page == "Analytics":
