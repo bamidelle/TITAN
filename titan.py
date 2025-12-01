@@ -768,70 +768,84 @@ st.markdown("---")
 
 st.markdown("### 📋 All Leads (expand a card to edit / change status)")
 st.markdown("<em>Expand a lead to edit details, change status, assign owner, and create estimates.</em>", unsafe_allow_html=True)
-    # Quick filters
-    q1, q2, q3 = st.columns([3,2,3])
-    with q1:
-        search_q = st.text_input("Search (lead_id, contact name, address, notes)")
-    with q2:
-        filter_src = st.selectbox("Source filter", options=["All"] + sorted(df["source"].dropna().unique().tolist()) if not df.empty else ["All"])
-    with q3:
-        filter_stage = st.selectbox("Stage filter", options=["All"] + PIPELINE_STAGES)
-    df_view = df.copy()
-    if search_q:
-        sq = search_q.lower()
-        df_view = df_view[df_view.apply(lambda r: sq in str(r.get("lead_id","")).lower() or sq in str(r.get("contact_name","")).lower() or sq in str(r.get("property_address","")).lower() or sq in str(r.get("notes","")).lower(), axis=1)]
-    if filter_src and filter_src != "All":
-        df_view = df_view[df_view["source"] == filter_src]
-    if filter_stage and filter_stage != "All":
-        df_view = df_view[df_view["stage"] == filter_stage]
 
-    if df_view.empty:
-        st.info("No leads to show.")
-    else:
-        for _, lead in df_view.sort_values("created_at", ascending=False).head(200).iterrows():
-            exp_key = f"exp_{lead['lead_id']}"
-            with st.expander(f"#{lead['lead_id']} — {lead.get('contact_name') or 'No name'} — {lead.get('stage')}", expanded=False):
-                left, right = st.columns([3,1])
-                with left:
-                    st.write(f"**Source:** {lead.get('source') or ''}  |  **Assigned:** {lead.get('assigned_to') or ''}")
-                    st.write(f"**Address:** {lead.get('property_address') or ''}")
-                    st.write(f"**Contact:** {lead.get('contact_name') or ''} / {lead.get('contact_phone') or ''} / {lead.get('contact_email') or ''}")
-                    st.write(f"**Notes:** {lead.get('notes') or ''}")
-                    st.write(f"**Created:** {lead.get('created_at')}")
-                with right:
-                    sla_sec, overdue = calculate_remaining_sla(lead.get("sla_entered_at") or lead.get("created_at"), lead.get("sla_hours"))
-                    if overdue:
-                        st.markdown("<div style='color:#dc2626;font-weight:700;'>❗ OVERDUE</div>", unsafe_allow_html=True)
-                    else:
-                        hours = int(sla_sec // 3600)
-                        mins = int((sla_sec % 3600) // 60)
-                        st.markdown(f"<div class='small-muted'>⏳ {hours}h {mins}m left</div>", unsafe_allow_html=True)
-                # update form
-                c1, c2 = st.columns(2)
-                with st.form(f"update_{lead['lead_id']}", clear_on_submit=False):
-                    new_stage = st.selectbox("Status", PIPELINE_STAGES, index=PIPELINE_STAGES.index(lead.get("stage")) if lead.get("stage") in PIPELINE_STAGES else 0)
-                    new_assigned = st.text_input("Assigned to (username)", value=lead.get("assigned_to") or "")
-                    new_est = st.number_input("Estimated value (USD)", value=float(lead.get("estimated_value") or 0.0), min_value=0.0, step=100.0)
-                    new_cost = st.number_input("Cost to acquire lead (USD)", value=float(lead.get("ad_cost") or 0.0), min_value=0.0, step=1.0)
-                    new_notes = st.text_area("Notes", value=lead.get("notes") or "")
-                    submitted = st.form_submit_button("Save changes")
-                    if submitted:
-                        try:
-                            upsert_lead_record({
-                                "lead_id": lead["lead_id"],
-                                "stage": new_stage,
-                                "assigned_to": new_assigned or None,
-                                "estimated_value": new_est,
-                                "ad_cost": new_cost,
-                                "notes": new_notes
-                            }, actor="admin")
-                            st.success("Lead updated")
-                            st.experimental_rerun()
-                        except Exception as e:
-                            st.error("Failed to update lead: " + str(e))
-                            st.write(traceback.format_exc())
+# Quick filters
+q1, q2, q3 = st.columns([3,2,3])
+with q1:
+    search_q = st.text_input("Search (lead_id, contact name, address, notes)")
+with q2:
+    filter_src = st.selectbox(
+        "Source filter",
+        options=["All"] + sorted(df["source"].dropna().unique().tolist()) if not df.empty else ["All"]
+    )
+with q3:
+    filter_stage = st.selectbox("Stage filter", options=["All"] + PIPELINE_STAGES)
 
+df_view = df.copy()
+if search_q:
+    sq = search_q.lower()
+    df_view = df_view[df_view.apply(
+        lambda r: sq in str(r.get("lead_id","")).lower() 
+                  or sq in str(r.get("contact_name","")).lower() 
+                  or sq in str(r.get("property_address","")).lower() 
+                  or sq in str(r.get("notes","")).lower(), axis=1
+    )]
+if filter_src and filter_src != "All":
+    df_view = df_view[df_view["source"] == filter_src]
+if filter_stage and filter_stage != "All":
+    df_view = df_view[df_view["stage"] == filter_stage]
 
+if df_view.empty:
+    st.info("No leads to show.")
+else:
+    for _, lead in df_view.sort_values("created_at", ascending=False).head(200).iterrows():
+        exp_key = f"exp_{lead['lead_id']}"
+        with st.expander(f"#{lead['lead_id']} — {lead.get('contact_name') or 'No name'} — {lead.get('stage')}", expanded=False):
+            left, right = st.columns([3,1])
+            with left:
+                st.write(f"**Source:** {lead.get('source') or ''}  |  **Assigned:** {lead.get('assigned_to') or ''}")
+                st.write(f"**Address:** {lead.get('property_address') or ''}")
+                st.write(f"**Contact:** {lead.get('contact_name') or ''} / {lead.get('contact_phone') or ''} / {lead.get('contact_email') or ''}")
+                st.write(f"**Notes:** {lead.get('notes') or ''}")
+                st.write(f"**Created:** {lead.get('created_at')}")
+            with right:
+                sla_sec, overdue = calculate_remaining_sla(
+                    lead.get("sla_entered_at") or lead.get("created_at"), lead.get("sla_hours")
+                )
+                if overdue:
+                    st.markdown("<div style='color:#dc2626;font-weight:700;'>❗ OVERDUE</div>", unsafe_allow_html=True)
+                else:
+                    hours = int(sla_sec // 3600)
+                    mins = int((sla_sec % 3600) // 60)
+                    st.markdown(f"<div class='small-muted'>⏳ {hours}h {mins}m left</div>", unsafe_allow_html=True)
+            
+            # update form
+            c1, c2 = st.columns(2)
+            with st.form(f"update_{lead['lead_id']}", clear_on_submit=False):
+                new_stage = st.selectbox(
+                    "Status", PIPELINE_STAGES,
+                    index=PIPELINE_STAGES.index(lead.get("stage")) if lead.get("stage") in PIPELINE_STAGES else 0
+                )
+                new_assigned = st.text_input("Assigned to (username)", value=lead.get("assigned_to") or "")
+                new_est = st.number_input("Estimated value (USD)", value=float(lead.get("estimated_value") or 0.0), min_value=0.0, step=100.0)
+                new_cost = st.number_input("Cost to acquire lead (USD)", value=float(lead.get("ad_cost") or 0.0), min_value=0.0, step=1.0)
+                new_notes = st.text_area("Notes", value=lead.get("notes") or "")
+                submitted = st.form_submit_button("Save changes")
+                if submitted:
+                    try:
+                        upsert_lead_record({
+                            "lead_id": lead["lead_id"],
+                            "stage": new_stage,
+                            "assigned_to": new_assigned or None,
+                            "estimated_value": new_est,
+                            "ad_cost": new_cost,
+                            "notes": new_notes
+                        }, actor="admin")
+                        st.success("Lead updated")
+                        st.experimental_rerun()
+                    except Exception as e:
+                        st.error("Failed to update lead: " + str(e))
+                        st.write(traceback.format_exc())
 
 
 # Analytics page (donut + SLA line + overdue table)
