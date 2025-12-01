@@ -680,64 +680,71 @@ def page_pipeline_board():
         stage_counts = df["stage"].value_counts().reindex(PIPELINE_STAGES, fill_value=0)
         pie_df = pd.DataFrame({"status": stage_counts})
 
-    # I PASTED THE REST OF PRIORITY TOP 5 LEADS HERE WHICH ENDED AT ANALYTICS PAGE
-    st.markdown("---")
-   # Priority leads Top 5
-    st.markdown("### TOP 5 PRIORITY LEADS")
-    st.markdown("<em>Highest urgency leads by priority score (0–1). Address these first.</em>", unsafe_allow_html=True)
-        priority_list = []
-        for _, row in df.iterrows():
-            try:
-                ml_prob = float(row.get("win_prob")) if row.get("win_prob") is not None else None
-            except Exception:
-                ml_prob = None
-            try:
-                score = compute_priority_for_lead_row(row, weights, ml_prob=ml_prob)
-            except Exception:
-                score = 0.0
-            sla_sec, overdue = calculate_remaining_sla(row.get("sla_entered_at") or row.get("created_at"), row.get("sla_hours"))
-            time_left_h = sla_sec / 3600.0 if sla_sec not in (None, float("inf")) else 9999.0
-            priority_list.append({
-                "id": int(row["id"]),
-                "contact_name": row.get("contact_name") or "No name",
-                "estimated_value": float(row.get("estimated_value") or 0.0),
-                "time_left_hours": time_left_h,
-                "priority_score": score,
-                "status": row.get("status"),
-                "sla_overdue": overdue,
-                "conversion_prob": ml_prob,
-                "damage_type": row.get("damage_type", "Unknown")
-            })
-        pr_df = pd.DataFrame(priority_list).sort_values("priority_score", ascending=False)
+    # Priority leads Top 5
+st.markdown("---")
+st.markdown("### TOP 5 PRIORITY LEADS")
+st.markdown("<em>Highest urgency leads by priority score (0–1). Address these first.</em>", unsafe_allow_html=True)
 
-        if pr_df.empty:
-            st.info("No priority leads to display.")
+priority_list = []
+for _, row in df.iterrows():
+    try:
+        ml_prob = float(row.get("win_prob")) if row.get("win_prob") is not None else None
+    except Exception:
+        ml_prob = None
+    try:
+        score = compute_priority_for_lead_row(row, weights, ml_prob=ml_prob)
+    except Exception:
+        score = 0.0
+
+    sla_sec, overdue = calculate_remaining_sla(row.get("sla_entered_at") or row.get("created_at"), row.get("sla_hours"))
+    time_left_h = sla_sec / 3600.0 if sla_sec not in (None, float("inf")) else 9999.0
+
+    priority_list.append({
+        "id": int(row["id"]),
+        "contact_name": row.get("contact_name") or "No name",
+        "estimated_value": float(row.get("estimated_value") or 0.0),
+        "time_left_hours": time_left_h,
+        "priority_score": score,
+        "status": row.get("status"),
+        "sla_overdue": overdue,
+        "conversion_prob": ml_prob,
+        "damage_type": row.get("damage_type", "Unknown")
+    })
+
+pr_df = pd.DataFrame(priority_list).sort_values("priority_score", ascending=False)
+
+if pr_df.empty:
+    st.info("No priority leads to display.")
+else:
+    for _, r in pr_df.head(5).iterrows():
+        score = r["priority_score"]
+        status = r["status"]
+        status_color = stage_colors.get(status, "#000000")
+
+        if score >= 0.7:
+            priority_color = "#ef4444"
+            priority_label = "🔴 CRITICAL"
+        elif score >= 0.45:
+            priority_color = "#f97316"
+            priority_label = "🟠 HIGH"
         else:
-            for _, r in pr_df.head(5).iterrows():
-                score = r["priority_score"]
-                status = r["status"]
-                status_color = stage_colors.get(status, "#000000")
-                if score >= 0.7:
-                    priority_color = "#ef4444"
-                    priority_label = "🔴 CRITICAL"
-                elif score >= 0.45:
-                    priority_color = "#f97316"
-                    priority_label = "🟠 HIGH"
-                else:
-                    priority_color = "#22c55e"
-                    priority_label = "🟢 NORMAL"
-                if r["sla_overdue"]:
-                    sla_html = f"<span style='color:#ef4444;font-weight:700;'>❗ OVERDUE</span>"
-                else:
-                    hours_left = int(r['time_left_hours'])
-                    mins_left = int((r['time_left_hours'] * 60) % 60)
-                    sla_html = f"<span style='color:#ef4444;font-weight:700;'>⏳ {hours_left}h {mins_left}m left</span>"
-                conv_html = ""
-                if r["conversion_prob"] is not None:
-                    conv_pct = r["conversion_prob"] * 100
-                    conv_color = "#22c55e" if conv_pct > 70 else ("#f97316" if conv_pct > 40 else "#ef4444")
-                    conv_html = f"<span style='color:{conv_color};font-weight:600;margin-left:12px;'>📊 {conv_pct:.0f}% Win Prob</span>"
-                st.markdown(f"""
+            priority_color = "#22c55e"
+            priority_label = "🟢 NORMAL"
+
+        if r["sla_overdue"]:
+            sla_html = f"<span style='color:#ef4444;font-weight:700;'>❗ OVERDUE</span>"
+        else:
+            hours_left = int(r['time_left_hours'])
+            mins_left = int((r['time_left_hours'] * 60) % 60)
+            sla_html = f"<span style='color:#ef4444;font-weight:700;'>⏳ {hours_left}h {mins_left}m left</span>"
+
+        conv_html = ""
+        if r["conversion_prob"] is not None:
+            conv_pct = r["conversion_prob"] * 100
+            conv_color = "#22c55e" if conv_pct > 70 else ("#f97316" if conv_pct > 40 else "#ef4444")
+            conv_html = f"<span style='color:{conv_color};font-weight:600;margin-left:12px;'>📊 {conv_pct:.0f}% Win Prob</span>"
+
+        st.markdown(f"""
 <div style="background: #000000; padding:12px; border-radius:12px; margin-bottom:10px;">
   <div style="display:flex; justify-content:space-between; align-items:center;">
     <div style="flex:1;">
@@ -757,10 +764,8 @@ def page_pipeline_board():
 </div>
 """, unsafe_allow_html=True)
 
+st.markdown("---")
 
-        st.markdown("---")
-
-    st.markdown("---")
     st.markdown("### 📋 All Leads (expand a card to edit / change status)")
     st.markdown("<em>Expand a lead to edit details, change status, assign owner, and create estimates.</em>", unsafe_allow_html=True)
     # Quick filters
