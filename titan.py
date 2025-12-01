@@ -680,6 +680,51 @@ def page_pipeline_board():
         stage_counts = df["stage"].value_counts().reindex(PIPELINE_STAGES, fill_value=0)
         pie_df = pd.DataFrame({"status": stage_counts})
 
+# Analytics page (donut + SLA line + overdue table)
+def page_analytics():
+    st.markdown("<div class='header'>📈 Analytics & SLA</div>", unsafe_allow_html=True)
+    st.markdown("<em>Donut of pipeline stages + SLA overdue chart and table</em>", unsafe_allow_html=True)
+    df = leads_df.copy()
+    if df.empty:
+        st.info("No leads to analyze.")
+        return
+    # Donut: pipeline stages
+    stage_counts = df["stage"].value_counts().reindex(PIPELINE_STAGES, fill_value=0)
+    pie_df = pd.DataFrame({"stage": stage_counts.index, "count": stage_counts.values})
+    fig = px.pie(pie_df, names="stage", values="count", hole=0.45, color="stage")
+    st.plotly_chart(fig, use_container_width=True)
+    st.markdown("---")
+    # SLA Overdue time series (last 30 days)
+    st.subheader("SLA Overdue (last 30 days)")
+    today = datetime.utcnow().date()
+    days = [today - timedelta(days=i) for i in range(29, -1, -1)]
+    ts = []
+    for d in days:
+        start_dt = datetime.combine(d, datetime.min.time())
+        end_dt = datetime.combine(d, datetime.max.time())
+        sub = df[(df["created_at"] >= start_dt) & (df["created_at"] <= end_dt)]
+        overdue_cnt = 0
+        for _, r in sub.iterrows():
+            _, overdue = calculate_remaining_sla(r.get("sla_entered_at") or r.get("created_at"), r.get("sla_hours"))
+            if overdue and r.get("stage") not in ("Won","Lost"):
+                overdue_cnt += 1
+        ts.append({"date": d, "overdue": overdue_cnt})
+    ts_df = pd.DataFrame(ts)
+    fig2 = px.line(ts_df, x="date", y="overdue", markers=True, title="SLA Overdue Count (30d)")
+    st.plotly_chart(fig2, use_container_width=True)
+    st.markdown("---")
+    st.subheader("Current Overdue Leads")
+    overdue_rows = []
+    for _, r in df.iterrows():
+        _, overdue = calculate_remaining_sla(r.get("sla_entered_at") or r.get("created_at"), r.get("sla_hours"))
+        if overdue and r.get("stage") not in ("Won","Lost"):
+            overdue_rows.append({"lead_id": r.get("lead_id"), "stage": r.get("stage"), "value": r.get("estimated_value"), "assigned_to": r.get("assigned_to")})
+    if overdue_rows:
+        st.dataframe(pd.DataFrame(overdue_rows))
+    else:
+        st.info("No overdue leads currently.")
+
+
 # ---------------- UPDATED ROUTER SECTION (WORKING) ----------------
 if page == "Dashboard":
     page_dashboard()
