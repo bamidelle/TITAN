@@ -682,32 +682,83 @@ def page_pipeline_board():
 
     # I PASTED THE REST OF PRIORITY TOP 5 LEADS HERE WHICH ENDED AT ANALYTICS PAGE
     st.markdown("---")
-    st.markdown("### TOP 5 PRIORITY LEADS")
-    st.markdown("<em>Highest urgency leads by priority score (0–1). Address these first.</em>", unsafe_allow_html=True)
-    if df.empty:
-        st.info("No priority leads to display.")
-    else:
-        df["priority_score"] = df.apply(lambda r: compute_priority_for_row(r), axis=1)
-        pr_df = df.sort_values("priority_score", ascending=False).head(5)
-        for _, r in pr_df.iterrows():
-            sla_sec, overdue = calculate_remaining_sla(r.get("sla_entered_at") or r.get("created_at"), r.get("sla_hours"))
-            hleft = int(sla_sec / 3600) if sla_sec not in (None, float("inf")) else 9999
-            sla_html = f"<span class='priority-time'>❗ OVERDUE</span>" if overdue else f"<span class='small-muted'>⏳ {hleft}h left</span>"
-            val_html = f"<span class='priority-money'>${r['estimated_value']:,.0f}</span>"
-            st.markdown(f"""
-                <div class='lead-card'>
-                  <div style='display:flex; justify-content:space-between; align-items:center;'>
-                    <div>
-                      <div style='font-weight:800;'>#{r['lead_id']} — {r.get('contact_name') or 'No name'}</div>
-                      <div class='small-muted'>{r.get('damage_type') or ''} • {r.get('source') or ''}</div>
-                    </div>
-                    <div style='text-align:right;'>
-                      <div style='font-size:20px; font-weight:900; color:#111;'>{r['priority_score']:.2f}</div>
-                      <div style='margin-top:8px;'>{val_html}<br>{sla_html}</div>
-                    </div>
-                  </div>
-                </div>
-            """, unsafe_allow_html=True)
+   # Priority leads Top 5
+        st.markdown("### TOP 5 PRIORITY LEADS")
+        st.markdown("<em>Highest urgency leads by priority score (0–1). Address these first.</em>", unsafe_allow_html=True)
+        priority_list = []
+        for _, row in df.iterrows():
+            try:
+                ml_prob = float(row.get("win_prob")) if row.get("win_prob") is not None else None
+            except Exception:
+                ml_prob = None
+            try:
+                score = compute_priority_for_lead_row(row, weights, ml_prob=ml_prob)
+            except Exception:
+                score = 0.0
+            sla_sec, overdue = calculate_remaining_sla(row.get("sla_entered_at") or row.get("created_at"), row.get("sla_hours"))
+            time_left_h = sla_sec / 3600.0 if sla_sec not in (None, float("inf")) else 9999.0
+            priority_list.append({
+                "id": int(row["id"]),
+                "contact_name": row.get("contact_name") or "No name",
+                "estimated_value": float(row.get("estimated_value") or 0.0),
+                "time_left_hours": time_left_h,
+                "priority_score": score,
+                "status": row.get("status"),
+                "sla_overdue": overdue,
+                "conversion_prob": ml_prob,
+                "damage_type": row.get("damage_type", "Unknown")
+            })
+        pr_df = pd.DataFrame(priority_list).sort_values("priority_score", ascending=False)
+
+        if pr_df.empty:
+            st.info("No priority leads to display.")
+        else:
+            for _, r in pr_df.head(5).iterrows():
+                score = r["priority_score"]
+                status = r["status"]
+                status_color = stage_colors.get(status, "#000000")
+                if score >= 0.7:
+                    priority_color = "#ef4444"
+                    priority_label = "🔴 CRITICAL"
+                elif score >= 0.45:
+                    priority_color = "#f97316"
+                    priority_label = "🟠 HIGH"
+                else:
+                    priority_color = "#22c55e"
+                    priority_label = "🟢 NORMAL"
+                if r["sla_overdue"]:
+                    sla_html = f"<span style='color:#ef4444;font-weight:700;'>❗ OVERDUE</span>"
+                else:
+                    hours_left = int(r['time_left_hours'])
+                    mins_left = int((r['time_left_hours'] * 60) % 60)
+                    sla_html = f"<span style='color:#ef4444;font-weight:700;'>⏳ {hours_left}h {mins_left}m left</span>"
+                conv_html = ""
+                if r["conversion_prob"] is not None:
+                    conv_pct = r["conversion_prob"] * 100
+                    conv_color = "#22c55e" if conv_pct > 70 else ("#f97316" if conv_pct > 40 else "#ef4444")
+                    conv_html = f"<span style='color:{conv_color};font-weight:600;margin-left:12px;'>📊 {conv_pct:.0f}% Win Prob</span>"
+                st.markdown(f"""
+<div style="background: #000000; padding:12px; border-radius:12px; margin-bottom:10px;">
+  <div style="display:flex; justify-content:space-between; align-items:center;">
+    <div style="flex:1;">
+      <div style="margin-bottom:6px;">
+        <span style="color:{priority_color}; font-weight:800;">{priority_label}</span>
+        <span style="display:inline-block; padding:6px 12px; border-radius:18px; font-size:12px; font-weight:600; margin-left:8px; background:{status_color}22; color:{status_color};">{status}</span>
+      </div>
+      <div style="font-size:20px; font-weight:900; color:#FFFFFF;">#{int(r['id'])} — {r['contact_name']}</div>
+      <div style="font-size:13px; color:var(--muted); margin-top:6px;">{r['damage_type'].title()} | Est: <span style='color:var(--money-green); font-weight:800;'>${r['estimated_value']:,.0f}</span></div>
+      <div style="font-size:13px; margin-top:8px; color:var(--muted);">{sla_html} {conv_html}</div>
+    </div>
+    <div style="text-align:right; padding-left:18px;">
+      <div style="font-size:28px; font-weight:900; color:{priority_color};">{r['priority_score']:.2f}</div>
+      <div style="font-size:11px; color:var(--muted); text-transform:uppercase;">Priority</div>
+    </div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+
+        st.markdown("---")
 
     st.markdown("---")
     st.markdown("### 📋 All Leads (expand a card to edit / change status)")
