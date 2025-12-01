@@ -14,6 +14,14 @@ import joblib
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float, Boolean, DateTime, Text, ForeignKey, inspect
 )
+import traceback
+
+# 👉 INSERT SAFETY INIT HERE
+try:
+    df = leads_df.copy()
+except NameError:
+    df = pd.DataFrame()
+
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sklearn.ensemble import RandomForestClassifier
@@ -648,55 +656,157 @@ def page_pipeline_board():
         st.plotly_chart(fig, use_container_width=True)
 
     st.markdown("---")
+# --------------------
+# TOP BAR (UI HELPER)
+# --------------------
+def render_topbar():
+    overdue_count = 0
+    for _, r in df.iterrows():
+        try:
+            sla_entered = r.get("sla_entered_at") or r.get("created_at") or datetime.utcnow()
+            sla_h = int(r.get("sla_hours") or 72)
+            if isinstance(sla_entered, str):
+                sla_entered = datetime.fromisoformat(sla_entered)
+            deadline = sla_entered + timedelta(hours=sla_h)
+            if deadline < datetime.utcnow() and r.get("stage") not in ("Won", "Lost"):
+                overdue_count += 1
+        except Exception:
+            continue
+
+    _, right = st.columns([8,2])
+    with right:
+        today_label = datetime.utcnow().strftime("%Y-%m-%d")
+        st.markdown(f"""
+            <div style="text-align:right; font-size:14px; padding-top:8px; padding-bottom:8px;">
+              {today_label} &nbsp;&nbsp;
+              <button style="background:none; border:none; font-size:18px;">🔔
+              <span style="background:red; color:white; border-radius:50%; padding:2px 6px; font-size:12px; font-weight:700;">
+              {overdue_count}</span></button>
+            </div>
+        """, unsafe_allow_html=True)
+
+# --------------------
+# PAGE: PIPELINE BOARD
+# --------------------
+def page_pipeline_board():
+    render_topbar()
+    st.markdown("<h2 style='margin-top:4px; margin-bottom:18px;'>TOTAL LEAD PIPELINE KEY PERFORMANCE INDICATOR</h2>", unsafe_allow_html=True)
+
+    if df.empty:
+        st.info("No leads yet.")
+        return
+
+    # KPI CARDS SPACING FIXED
+    total = len(df)
+    qualified = df[df.get("qualified", False) == True].shape[0] if "qualified" in df else 0
+    awarded = df[df.get("stage", "") == "Won"].shape[0] if "stage" in df else 0
+    lost = df[df.get("stage", "") == "Lost"].shape[0] if "stage" in df else 0
+    closed = awarded + lost
+    conversion_rate = (awarded / closed * 100) if closed else 0.0
+    pipeline_job_value = float(df.get("estimated_value", 0).sum()) if "estimated_value" in df else 0.0
+
+    # KPI row 1
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Active Leads", total - (awarded + lost))
+    c2.metric("SLA Success", f"{(df.get('contacted', 0).sum()/total*100):.1f}%" if "contacted" in df and total else "0%")
+    c3.metric("Qualification Rate", f"{(qualified/total*100):.1f}%" if qualified and total else "0%")
+    c4.metric("Conversion Rate", f"{conversion_rate:.1f}%")
+
+    st.markdown("<div style='height:26px'></div>", unsafe_allow_html=True)
+
+    # KPI row 2
+    c5, c6, c7 = st.columns(3)
+    c5.metric("Inspections Booked", f"{(df.get('inspection_scheduled', 0).sum()/qualified*100):.1f}%" if "inspection_scheduled" in df and qualified else "0%")
+    c6.metric("Estimates Sent", df.get("estimate_submitted", 0).sum() if "estimate_submitted" in df else 0)
+    c7.metric("Pipeline Job Value", f"${pipeline_job_value:,.0f}")
+
+    st.markdown("---")
+
+    # ==========================
+    # ✅ FIXED TOP 5 UI SECTION
+    # ==========================
+
     st.markdown("### TOP 5 PRIORITY LEADS")
     st.markdown("<em>Highest urgency leads by priority score (0–1). Address these first.</em>", unsafe_allow_html=True)
 
-    # compute weights (from session if present)
-    weights = st.session_state.get("weights", {"score_w":0.6, "value_w":0.3, "sla_w":0.1, "value_baseline":5000.0})
-    # compute priority score on df
-    if not df.empty:
-        df["priority_score"] = df.apply(lambda r: compute_priority_for_row(r, weights=weights), axis=1)
-        pr_df = df.sort_values("priority_score", ascending=False).head(5)
-        if pr_df.empty:
-            st.info("No priority leads to display.")
-        else:
-            for _, r in pr_df.iterrows():
-                sla_sec, overdue = calculate_remaining_sla(r.get("sla_entered_at") or r.get("created_at"), r.get("sla_hours"))
-                time_left_h = int(sla_sec / 3600) if sla_sec not in (None, float("inf")) else 9999
-                if r["priority_score"] >= 0.75:
-                    urg_label = "High"
-                    urg_color = "#ef4444"
-                elif r["priority_score"] >= 0.4:
-                    urg_label = "Medium"
-                    urg_color = "#f97316"
-                else:
-                    urg_label = "Low"
-                    urg_color = "#22c55e"
-                sla_html = f"<span class='priority-meta'>❗ OVERDUE</span>" if overdue else f"<span class='priority-meta'>⏳ {time_left_h}h left</span>"
-                val_html = f"<span class='priority-meta'>${r['estimated_value']:,.0f}</span>"
-                status = r.get("stage") or "New"
-                status_color = stage_colors.get(status, "#000000")
-                st.markdown(f"""
-                    <div class='priority-card'>
-                      <div style='display:flex; justify-content:space-between; align-items:center;'>
-                        <div>
-                          <div class='priority-title'>#{r['lead_id']} — {r.get('contact_name') or 'No name'}</div>
-                          <div class='priority-meta'>{r.get('damage_type') or ''} • {r.get('source') or ''}</div>
-                        </div>
-                        <div style='text-align:right;'>
-                          <div style='font-size:20px; font-weight:900; color:white;'>{r['priority_score']:.2f}</div>
-                          <div style='margin-top:8px;'>
-                            <span class='urgency-dot' style='background:{urg_color};'></span><span class='priority-meta'>{urg_label}</span><br>
-                            <span style='color:{status_color}; font-weight:700;'>{status}</span><br>
-                            {val_html}<br>
-                            {sla_html}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                """, unsafe_allow_html=True)
-    else:
+    priority_list = []
+    for _, row in df.iterrows():
+        try:
+            ml_prob = float(row.get("win_prob")) if row.get("win_prob") is not None else None
+        except Exception:
+            ml_prob = None
+        try:
+            score = compute_priority_for_lead_row(row, weights, ml_prob=ml_prob)
+        except Exception:
+            score = 0.0
+        sla_sec, overdue = calculate_remaining_sla(row.get("sla_entered_at") or row.get("created_at"), row.get("sla_hours"))
+        time_left_h = sla_sec/3600.0 if sla_sec not in (None, float("inf")) else 9999.0
+        priority_list.append({
+            "id": int(row.get("id", 0)),
+            "contact_name": row.get("contact_name") or "No name",
+            "estimated_value": float(row.get("estimated_value") or 0.0),
+            "time_left_hours": time_left_h,
+            "priority_score": score,
+            "status": row.get("status"),
+            "sla_overdue": overdue,
+            "conversion_prob": ml_prob,
+            "damage_type": row.get("damage_type", "Unknown")
+        })
+
+    pr_df = pd.DataFrame(priority_list).sort_values("priority_score", ascending=False)
+
+    stage_colors = st.session_state.get("stage_colors", {})
+    if pr_df.empty:
         st.info("No priority leads to display.")
+    else:
+        for _, r in pr_df.head(5).iterrows():
+            score = r["priority_score"]
+            status = r.get("status")
+            status_color = stage_colors.get(status, "#000000")
+
+            if score >= 0.7:
+                priority_color = "#ef4444"
+                priority_label = "🔴 CRITICAL"
+            elif score >= 0.45:
+                priority_color = "#f97316"
+                priority_label = "🟠 HIGH"
+            else:
+                priority_color = "#22c55e"
+                priority_label = "🟢 NORMAL"
+
+            if r["sla_overdue"]:
+                sla_html = "<span style='color:#ef4444;font-weight:700;'>❗ OVERDUE</span>"
+            else:
+                hours_left = int(r["time_left_hours"])
+                mins_left = int((r["time_left_hours"]*60) % 60)
+                sla_html = f"<span style='color:#ef4444;font-weight:700;'>⏳ {hours_left}h {mins_left}m left</span>"
+
+            conv_html = ""
+            if r["conversion_prob"] is not None:
+                conv_pct = r["conversion_prob"] * 100
+                conv_color = "#22c55e" if conv_pct > 70 else ("#f97316" if conv_pct > 40 else "#ef4444")
+                conv_html = f"<span style='color:{conv_color};font-weight:600;margin-left:12px;'>📊 {conv_pct:.0f}% Win Prob</span>"
+
+            st.markdown(f"""
+<div style="background: #000000; padding:12px; border-radius:12px; margin-bottom:12px;">
+  <div style="display:flex; justify-content:space-between; align-items:center;">
+    <div style="flex:1;">
+      <div style="margin-bottom:6px;">
+        <span style="color:{priority_color}; font-weight:800;">{priority_label}</span>
+        <span style="display:inline-block; padding:6px 12px; border-radius:18px; font-size:12px; font-weight:600; margin-left:8px; background:{status_color}22; color:{status_color};">{status}</span>
+      </div>
+      <div style="font-size:20px; font-weight:900; color:#FFFFFF;">#{int(r['id'])} — {r['contact_name']}</div>
+      <div style="font-size:13px; margin-top:6px; opacity:0.8;">{r['damage_type'].title()} | Est:
+      <span style="font-weight:800;">${r['estimated_value']:,.0f}</span></div>
+      <div style="font-size:13px; margin-top:8px; opacity:0.8;">{sla_html} {conv_html}</div>
+    </div>
+    <div style="text-align:right; padding-left:18px;">
+      <div style="font-size:26px; font-weight:900;">{r['priority_score']:.2f}</div>
+      <div style="font-size:11px; text-transform:uppercase; opacity:0.7;">Priority</div>
+    </div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
     st.markdown("---")
     st.markdown("### 📋 All Leads (expand a card to edit / change status)")
