@@ -714,15 +714,19 @@ def page_pipeline_board():
     with q3:
         filter_stage = st.selectbox("Stage filter", options=["All"] + PIPELINE_STAGES)
 
-    df_view = df.copy()
-    if search_q:
-        sq = search_q.lower()
-        df_view = df_view[df_view.apply(
-            lambda r: sq in str(r.get("lead_id","")).lower()
-                      or sq in str(r.get("contact_name","")).lower()
-                      or sq in str(r.get("property_address","")).lower()
-                      or sq in str(r.get("notes","")).lower(), axis=1
-        )]
+    df = leads_df.copy()
+
+search_q = st.session_state.get("search_q", "")
+if search_q:
+    sq = str(search_q).lower()
+    df_view = leads_df[df.apply(
+        lambda r: sq in str(r.get("lead_id","")).lower()
+                  or sq in str(r.get("contact_name","")).lower()
+                  or sq in str(r.get("property_address","")).lower()
+                  or sq in str(r.get("notes","")).lower(), axis=1
+    )]
+else:
+    df_view = leads_df.copy()
     if filter_src and filter_src != "All":
         df_view = df_view[df_view["source"] == filter_src]
     if filter_stage and filter_stage != "All":
