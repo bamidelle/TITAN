@@ -1,6 +1,8 @@
-# titan_fixed.py
+# titan_fixed_full.py
 """
-TITAN Backend - Fixed version (priority block moved into pipeline page).
+TITAN Backend - Fixed and hardened version.
+Fixes: NameError df undefined, .lower() on None, undefined filter_src/filter_stage,
+and ensures pages are only executed within router.
 """
 
 import os
@@ -33,7 +35,6 @@ PIPELINE_STAGES = [
 DEFAULT_SLA_HOURS = 72
 COMFORTAA_IMPORT = "https://fonts.googleapis.com/css2?family=Comfortaa:wght@300;400;700&display=swap"
 
-# KPI colors (numbers)
 KPI_COLORS = ["#2563eb", "#0ea5a4", "#a855f7", "#f97316", "#ef4444", "#6d28d9", "#22c55e"]
 
 # ----------------------
@@ -101,7 +102,9 @@ class LeadHistory(Base):
 
 Base.metadata.create_all(bind=engine)
 
-# Safe migration attempt (best-effort add missing columns)
+# ----------------------
+# Safe migrate (best-effort)
+# ----------------------
 def safe_migrate():
     try:
         inspector = inspect(engine)
@@ -127,7 +130,9 @@ def safe_migrate():
 
 safe_migrate()
 
+# ----------------------
 # DB helpers
+# ----------------------
 def get_session():
     return SessionLocal()
 
@@ -291,7 +296,9 @@ def add_user(username: str, full_name: str = "", role: str = "Admin"):
     finally:
         s.close()
 
+# ----------------------
 # ML helpers (train/load/score)
+# ----------------------
 def train_internal_model():
     df = leads_to_df()
     if df.empty or df["converted"].nunique() < 2:
@@ -341,7 +348,9 @@ def score_dataframe(df, model, cols):
         df["score"] = model.predict(X)
     return df
 
+# ----------------------
 # Priority & SLA utilities
+# ----------------------
 def calculate_remaining_sla(sla_entered_at, sla_hours):
     try:
         if sla_entered_at is None:
@@ -411,12 +420,11 @@ body, .stApp { background: #ffffff; color: #0b1220; font-family: 'Comfortaa', sa
 st.markdown(APP_CSS, unsafe_allow_html=True)
 
 # ----------------------
-# Sidebar controls (Admin backend - no front login)
+# Sidebar controls
 # ----------------------
 with st.sidebar:
     st.header("TITAN Backend (Admin)")
     st.markdown("You are using the backend admin interface. User accounts and roles are managed in Settings.")
-    # removed separate Dashboard entry: pipeline is primary
     page = st.radio("Navigate", ["Pipeline Board","Lead Capture","Analytics","CPA & ROI","ML (internal)","Settings","Exports"], index=0)
     st.markdown("---")
     st.markdown("Date range for reports")
@@ -449,14 +457,14 @@ with st.sidebar:
         except Exception:
             pass
 
-# Utility: date filters
+# Utility date filters (safe)
 start_dt = st.session_state.get("start_date", None)
 end_dt = st.session_state.get("end_date", None)
 
-# Load leads
+# Load leads (safe)
 try:
     leads_df = leads_to_df(start_dt, end_dt)
-except OperationalError as exc:
+except Exception as exc:
     st.error("Database error — ensure file is writable and accessible.")
     st.stop()
 
@@ -468,11 +476,8 @@ if model is not None and not leads_df.empty:
     except Exception:
         pass
 
-# ----------------------
-# Top bar (date + bell) — placed above page content
-# ----------------------
+# Topbar + alerts helpers
 def render_topbar():
-    # compute overdue count
     overdue_count = 0
     for _, r in leads_df.iterrows():
         rem_s, overdue_flag = calculate_remaining_sla(r.get("sla_entered_at") or r.get("created_at"), r.get("sla_hours"))
@@ -482,12 +487,11 @@ def render_topbar():
     with left:
         st.markdown("")
     with right:
-        # show selected date range (or today) and bell with badge
         if start_dt and end_dt:
             label = f"{start_dt.strftime('%Y-%m-%d')} → {end_dt.strftime('%Y-%m-%d')}"
         else:
             label = datetime.utcnow().strftime('%Y-%m-%d')
-        st.markdown(f"<div class='topbar-right'><small class='small-muted'>{label}</small><br><button class='bell-btn' onclick=\"window.parent.postMessage({{'type':'toggle_alerts'}}, '*')\">🔔 <span class='badge'>{overdue_count}</span></button></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='topbar-right'><small class='small-muted'>{label}</small><br><button class='bell-btn'>🔔 <span class='badge'>{overdue_count}</span></button></div>", unsafe_allow_html=True)
 
 if 'show_alerts' not in st.session_state:
     st.session_state.show_alerts = False
@@ -498,18 +502,30 @@ def alerts_ui():
         rem_s, overdue_flag = calculate_remaining_sla(r.get("sla_entered_at") or r.get("created_at"), r.get("sla_hours"))
         if overdue_flag and r.get("stage") not in ("Won","Lost"):
             overdue.append(r)
-    if overdue:
-        if st.session_state.get("show_alerts", False):
-            with st.expander("SLA Alerts (click to close)", expanded=True):
-                for r in overdue:
-                    st.markdown(f"**{r['lead_id']}** — Stage: {r['stage']} — <span style='color:#22c55e;'>${r['estimated_value']:,.0f}</span> — <span style='color:#dc2626;'>OVERDUE</span>", unsafe_allow_html=True)
-                if st.button("Close Alerts"):
-                    st.session_state.show_alerts = False
+    if overdue and st.session_state.get("show_alerts", False):
+        with st.expander("SLA Alerts (click to close)", expanded=True):
+            for r in overdue:
+                st.markdown(f"**{r['lead_id']}** — Stage: {r['stage']} — <span style='color:#22c55e;'>${r['estimated_value']:,.0f}</span> — <span style='color:#dc2626;'>OVERDUE</span>", unsafe_allow_html=True)
+            if st.button("Close Alerts"):
+                st.session_state.show_alerts = False
+
+# small mapping of stage colors for priority cards
+stage_colors = {
+    "New": "#0ea5a4",
+    "Contacted": "#2563eb",
+    "Inspection Scheduled": "#f97316",
+    "Inspection Completed": "#a855f7",
+    "Estimate Sent": "#6d28d9",
+    "Qualified": "#22c55e",
+    "Won": "#15803d",
+    "Lost": "#6b7280"
+}
 
 # ----------------------
-# PAGES
+# PAGES (definitions only)
 # ----------------------
 def page_lead_capture():
+    render_topbar()
     st.markdown("<div class='header'>📇 Lead Capture</div>", unsafe_allow_html=True)
     st.markdown("<em>Create or upsert a lead. All inputs are saved for reporting and CPA calculations.</em>", unsafe_allow_html=True)
     with st.form("lead_capture_form", clear_on_submit=True):
@@ -552,37 +568,14 @@ def page_lead_capture():
                 st.error("Failed to save lead: " + str(e))
                 st.write(traceback.format_exc())
 
-    st.markdown("---")
-    st.subheader("Recent leads")
-    df = leads_to_df(None, None)
-    if df.empty:
-        st.info("No leads yet.")
-    else:
-        st.dataframe(df.sort_values("created_at", ascending=False).head(50))
-
-def page_dashboard():
-    page_pipeline_board()
-
-# small mapping of stage colors for priority cards
-stage_colors = {
-    "New": "#0ea5a4",
-    "Contacted": "#2563eb",
-    "Inspection Scheduled": "#f97316",
-    "Inspection Completed": "#a855f7",
-    "Estimate Sent": "#6d28d9",
-    "Qualified": "#22c55e",
-    "Won": "#15803d",
-    "Lost": "#6b7280"
-}
-
 def page_pipeline_board():
     render_topbar()
     st.markdown("<div class='header'>PIPELINE BOARD — TOTAL LEAD PIPELINE</div>", unsafe_allow_html=True)
     st.markdown("<em>High-level pipeline board with KPI cards and priority list.</em>", unsafe_allow_html=True)
     alerts_ui()
 
-    # use a local copy of leads_df
-    df = leads_df.copy()
+    # ensure df exists locally
+    df = leads_df.copy() if not leads_df.empty else pd.DataFrame()
     total_leads = len(df)
     qualified_leads = int(df[df["qualified"] == True].shape[0]) if not df.empty else 0
     sla_success_count = int(df[df["contacted"] == True].shape[0]) if not df.empty else 0
@@ -608,7 +601,7 @@ def page_pipeline_board():
         ("Pipeline Job Value", f"${pipeline_job_value:,.0f}", KPI_COLORS[6], "Total pipeline job value")
     ]
 
-    # render KPI in two distinct rows with spacing
+    # render KPI rows
     r1 = st.columns(4)
     for col, (title, value, color, note) in zip(r1, KPI_ITEMS[:4]):
         pct = min(100, max(10, (hash(title) % 80) + 20))
@@ -651,9 +644,8 @@ def page_pipeline_board():
     st.markdown("### TOP 5 PRIORITY LEADS")
     st.markdown("<em>Highest urgency leads by priority score (0–1). Address these first.</em>", unsafe_allow_html=True)
 
-    # compute weights (from session if present)
+    # safe session weights fallback
     weights = st.session_state.get("weights", {"score_w":0.6, "value_w":0.3, "sla_w":0.1, "value_baseline":5000.0})
-    # compute priority score on df
     if not df.empty:
         df["priority_score"] = df.apply(lambda r: compute_priority_for_row(r, weights=weights), axis=1)
         pr_df = df.sort_values("priority_score", ascending=False).head(5)
@@ -664,14 +656,11 @@ def page_pipeline_board():
                 sla_sec, overdue = calculate_remaining_sla(r.get("sla_entered_at") or r.get("created_at"), r.get("sla_hours"))
                 time_left_h = int(sla_sec / 3600) if sla_sec not in (None, float("inf")) else 9999
                 if r["priority_score"] >= 0.75:
-                    urg_label = "High"
-                    urg_color = "#ef4444"
+                    urg_label = "High"; urg_color = "#ef4444"
                 elif r["priority_score"] >= 0.4:
-                    urg_label = "Medium"
-                    urg_color = "#f97316"
+                    urg_label = "Medium"; urg_color = "#f97316"
                 else:
-                    urg_label = "Low"
-                    urg_color = "#22c55e"
+                    urg_label = "Low"; urg_color = "#22c55e"
                 sla_html = f"<span class='priority-meta'>❗ OVERDUE</span>" if overdue else f"<span class='priority-meta'>⏳ {time_left_h}h left</span>"
                 val_html = f"<span class='priority-meta'>${r['estimated_value']:,.0f}</span>"
                 status = r.get("stage") or "New"
@@ -702,31 +691,31 @@ def page_pipeline_board():
     st.markdown("### 📋 All Leads (expand a card to edit / change status)")
     st.markdown("<em>Expand a lead to edit details, change status, assign owner, and create estimates.</em>", unsafe_allow_html=True)
 
-    # Quick filters
-    q1, q2, q3 = st.columns([3,2,3])
-    with q1:
-        search_q = st.text_input("Search (lead_id, contact name, address, notes)")
-    with q2:
-        filter_src = st.selectbox(
-            "Source filter",
-            options=["All"] + sorted(df["source"].dropna().unique().tolist()) if not df.empty else ["All"]
-        )
-    with q3:
-        filter_stage = st.selectbox("Stage filter", options=["All"] + PIPELINE_STAGES)
+    # Quick filters - use session state safe fallbacks
+    search_q = st.text_input("Search (lead_id, contact name, address, notes)", value=st.session_state.get("search_q", ""))
+    # update session for persistence
+    st.session_state["search_q"] = search_q
 
-    df = leads_df.copy()
+    filter_src = st.selectbox(
+        "Source filter",
+        options=["All"] + sorted(df["source"].dropna().unique().tolist()) if not df.empty else ["All"],
+        index=0
+    )
+    st.session_state["filter_src"] = filter_src
 
-search_q = st.session_state.get("search_q", "")
-if search_q:
-    sq = str(search_q).lower()
-    df_view = leads_df[df.apply(
-        lambda r: sq in str(r.get("lead_id","")).lower()
-                  or sq in str(r.get("contact_name","")).lower()
-                  or sq in str(r.get("property_address","")).lower()
-                  or sq in str(r.get("notes","")).lower(), axis=1
-    )]
-else:
-    df_view = leads_df.copy()
+    filter_stage = st.selectbox("Stage filter", options=["All"] + PIPELINE_STAGES, index=0)
+    st.session_state["filter_stage"] = filter_stage
+
+    # construct df_view safely
+    df_view = df.copy()
+    sq = str(search_q or "").lower()
+    if sq:
+        df_view = df_view[df_view.apply(
+            lambda r: sq in str(r.get("lead_id","")).lower()
+                      or sq in str(r.get("contact_name","")).lower()
+                      or sq in str(r.get("property_address","")).lower()
+                      or sq in str(r.get("notes","")).lower(), axis=1
+        )]
     if filter_src and filter_src != "All":
         df_view = df_view[df_view["source"] == filter_src]
     if filter_stage and filter_stage != "All":
@@ -745,9 +734,7 @@ else:
                     st.write(f"**Notes:** {lead.get('notes') or ''}")
                     st.write(f"**Created:** {lead.get('created_at')}")
                 with right:
-                    sla_sec, overdue = calculate_remaining_sla(
-                        lead.get("sla_entered_at") or lead.get("created_at"), lead.get("sla_hours")
-                    )
+                    sla_sec, overdue = calculate_remaining_sla(lead.get("sla_entered_at") or lead.get("created_at"), lead.get("sla_hours"))
                     if overdue:
                         st.markdown("<div style='color:#dc2626;font-weight:700;'>❗ OVERDUE</div>", unsafe_allow_html=True)
                     else:
@@ -755,12 +742,8 @@ else:
                         mins = int((sla_sec % 3600) // 60)
                         st.markdown(f"<div class='small-muted'>⏳ {hours}h {mins}m left</div>", unsafe_allow_html=True)
 
-                # update form
                 with st.form(f"update_{lead['lead_id']}", clear_on_submit=False):
-                    new_stage = st.selectbox(
-                        "Status", PIPELINE_STAGES,
-                        index=PIPELINE_STAGES.index(lead.get("stage")) if lead.get("stage") in PIPELINE_STAGES else 0
-                    )
+                    new_stage = st.selectbox("Status", PIPELINE_STAGES, index=PIPELINE_STAGES.index(lead.get("stage")) if lead.get("stage") in PIPELINE_STAGES else 0)
                     new_assigned = st.text_input("Assigned to (username)", value=lead.get("assigned_to") or "")
                     new_est = st.number_input("Estimated value (USD)", value=float(lead.get("estimated_value") or 0.0), min_value=0.0, step=100.0)
                     new_cost = st.number_input("Cost to acquire lead (USD)", value=float(lead.get("ad_cost") or 0.0), min_value=0.0, step=1.0)
@@ -782,15 +765,14 @@ else:
                             st.error("Failed to update lead: " + str(e))
                             st.write(traceback.format_exc())
 
-# Analytics page
 def page_analytics():
+    render_topbar()
     st.markdown("<div class='header'>📈 Analytics & SLA</div>", unsafe_allow_html=True)
     st.markdown("<em>Donut of pipeline stages + SLA overdue chart and table</em>", unsafe_allow_html=True)
-    df = leads_df.copy()
+    df = leads_df.copy() if not leads_df.empty else pd.DataFrame()
     if df.empty:
         st.info("No leads to analyze.")
         return
-    # Donut: pipeline stages
     stage_counts = df["stage"].value_counts().reindex(PIPELINE_STAGES, fill_value=0)
     pie_df = pd.DataFrame({"stage": stage_counts.index, "count": stage_counts.values})
     fig = px.pie(pie_df, names="stage", values="count", hole=0.45, color="stage")
@@ -802,7 +784,6 @@ def page_analytics():
         figc = px.bar(agg, x="source", y=["total_spend","conversions"], barmode="group", title="Cost vs Conversions by Source")
         st.plotly_chart(figc, use_container_width=True)
     st.markdown("---")
-    # SLA Overdue time series (last 30 days)
     st.subheader("SLA Overdue (last 30 days)")
     today = datetime.utcnow().date()
     days = [today - timedelta(days=i) for i in range(29, -1, -1)]
@@ -832,11 +813,11 @@ def page_analytics():
     else:
         st.info("No overdue leads currently.")
 
-# CPA & ROI page
 def page_cpa_roi():
+    render_topbar()
     st.markdown("<div class='header'>💰 CPA & ROI</div>", unsafe_allow_html=True)
     st.markdown("<em>Total Marketing Spend vs Conversions and ROI calculations.</em>", unsafe_allow_html=True)
-    df = leads_df.copy()
+    df = leads_df.copy() if not leads_df.empty else pd.DataFrame()
     if df.empty:
         st.info("No leads")
         return
@@ -858,8 +839,8 @@ def page_cpa_roi():
         fig = px.bar(agg, x="source", y=["total_spend","conversions"], barmode="group", title="Total Spend vs Conversions by Source")
         st.plotly_chart(fig, use_container_width=True)
 
-# ML internal page
 def page_ml_internal():
+    render_topbar()
     st.markdown("<div class='header'>🧠 Internal ML — Lead Scoring</div>", unsafe_allow_html=True)
     st.markdown("<em>Model runs internally and writes score back to leads. No user tuning exposed.</em>", unsafe_allow_html=True)
     if st.button("Train model (internal)"):
@@ -898,8 +879,8 @@ def page_ml_internal():
             scored = score_dataframe(df.copy(), model, cols).sort_values("score", ascending=False).head(20)
             st.dataframe(scored[["lead_id","source","stage","estimated_value","ad_cost","score"]])
 
-# Settings page
 def page_settings():
+    render_topbar()
     st.markdown("<div class='header'>⚙️ Settings & User Management</div>", unsafe_allow_html=True)
     st.markdown("<em>Add team users, set roles for role-based integration later.</em>", unsafe_allow_html=True)
     st.subheader("Users")
@@ -939,8 +920,8 @@ def page_settings():
     finally:
         s.close()
 
-# Exports page
 def page_exports():
+    render_topbar()
     st.markdown("<div class='header'>📤 Exports & Imports</div>", unsafe_allow_html=True)
     st.markdown("<em>Export leads, import CSV/XLSX. Imported rows upsert by lead_id.</em>", unsafe_allow_html=True)
     df = leads_to_df(None, None)
@@ -987,7 +968,9 @@ def page_exports():
         except Exception as e:
             st.error("Failed to import: " + str(e))
 
-# Router
+# ----------------------
+# Router (call selected page)
+# ----------------------
 if page == "Pipeline Board":
     page_pipeline_board()
 elif page == "Lead Capture":
@@ -1004,3 +987,7 @@ elif page == "Exports":
     page_exports()
 else:
     st.info("Page not implemented yet.")
+
+# Footer
+st.markdown("---")
+st.markdown("<div class='small-muted'>TITAN Backend — SQLite persistence. Designed as admin backend for future WordPress integration.</div>", unsafe_allow_html=True)
