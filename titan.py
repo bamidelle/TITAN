@@ -766,8 +766,8 @@ else:
 
 st.markdown("---")
 
-    st.markdown("### 📋 All Leads (expand a card to edit / change status)")
-    st.markdown("<em>Expand a lead to edit details, change status, assign owner, and create estimates.</em>", unsafe_allow_html=True)
+st.markdown("### 📋 All Leads (expand a card to edit / change status)")
+st.markdown("<em>Expand a lead to edit details, change status, assign owner, and create estimates.</em>", unsafe_allow_html=True)
     # Quick filters
     q1, q2, q3 = st.columns([3,2,3])
     with q1:
