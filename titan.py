@@ -629,10 +629,12 @@ def page_pipeline_board():
         pie_df = pd.DataFrame({"status": stage_counts})
 
 # ---------------- UPDATED ROUTER SECTION (WORKING) ----------------
-if page == "Pipeline Board":
-    page_pipeline_board()
+if page == "Dashboard":
+    page_dashboard()
 elif page == "Lead Capture":
-    page_lead()
+    page_lead_capture()
+elif page == "Pipeline Board":
+    page_pipeline_board()
 elif page == "Analytics":
     page_analytics()
 elif page == "CPA & ROI":
@@ -645,6 +647,7 @@ elif page == "Exports":
     page_exports()
 else:
     st.info("Page not implemented yet.")
+
 
 
 
