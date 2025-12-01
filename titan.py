@@ -627,3 +627,21 @@ def page_pipeline_board():
     else:
         stage_counts = df["stage"].value_counts().reindex(PIPELINE_STAGES, fill_value=0)
         pie_df = pd.DataFrame({"status": stage_counts})
+
+if page == "Pipeline Board":
+    page_pipeline_board()
+elif page == "Lead Capture":
+    page_lead_capture()
+elif page == "Analytics":
+    page_analytics()
+elif page == "CPA & ROI":
+    page_cpa_roi()
+elif page == "ML (internal)":
+    page_ml_internal()
+elif page == "Settings":
+    page_settings()
+elif page == "Exports":
+    page_exports()
+else:
+    st.info("Page not implemented yet.")
+
