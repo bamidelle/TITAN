@@ -486,6 +486,37 @@ if page == "Leads / Capture":
                 df_view["property_address"].fillna("").str.lower().str.contains(q2)
             ]
         st.dataframe(df_view.sort_values("created_at", ascending=False).head(200))
+# -------------------------------------------
+# SIDEBAR NAVIGATION (REPLACES DASHBOARD, RETAINS PIPELINE)
+# -------------------------------------------
+page = st.sidebar.radio(
+    "Navigate",
+    ["Pipeline", "Lead Capture", "Analytics & SLA", "CPA", "ROI", "Exports", "Settings", "ML", "Reports"]
+)
+
+# 2 ROWS KPI SPACING FIX + PRIORITY CARD STYLES ALREADY IN GLOBAL CSS ✅
+
+# -------------------------------------------
+# PAGE RENDERING LOGIC
+# -------------------------------------------
+if page == "Pipeline":
+    page_pipeline()
+elif page == "Lead Capture":
+    page_capture()
+elif page == "Analytics & SLA":
+    page_analytics()
+elif page == "CPA":
+    page_cpa()
+elif page == "ROI":
+    page_roi()
+elif page == "Exports":
+    page_exports()
+elif page == "Settings":
+    page_settings()
+elif page == "ML":
+    page_ml()
+elif page == "Reports":
+    page_reports()
 
 # --------------------------
 # Page: Pipeline Board
